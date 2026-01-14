@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# TUNNEL MANAGER - Versão Simplificada e Corrigida
+# TUNNEL MANAGER - Versão Corrigida com Captura de URL
 # =============================================================================
 
 # Verificar versão do Bash
@@ -11,7 +11,7 @@ fi
 
 # Configurações básicas
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="2.1.0"
+VERSION="2.2.0"
 CONFIG_FILE="$HOME/.tunnel-manager.conf"
 LOG_DIR="$HOME/.tunnel-manager/logs"
 PID_FILE="/tmp/tunnel-manager.pid"
@@ -30,6 +30,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 BOLD='\033[1m'
 
@@ -76,13 +77,20 @@ load_language() {
         TEXT[http_started]="HTTP Server started (PID: {1})"
         TEXT[tunnel_created]="✅ TUNNEL CREATED SUCCESSFULLY!"
         TEXT[tunnel_url]="URL: {1}"
-        TEXT[local_url]="Local: http://localhost:{2}"
-        TEXT[server_dir]="Directory: {3}"
+        TEXT[local_url]="Local: http://localhost:{1}"
+        TEXT[server_dir]="Directory: {1}"
         TEXT[checking_deps]="Checking dependencies..."
         TEXT[python_found]="Python3 found"
         TEXT[cloudflared_found]="Cloudflared found"
         TEXT[cloudflared_not_found]="Cloudflared not found"
         TEXT[downloading_cf]="Downloading Cloudflared..."
+        TEXT[waiting_url]="Waiting for Cloudflared URL..."
+        TEXT[press_ctrl_c]="Press Ctrl+C to stop"
+        TEXT[files_in_dir]="Files in directory:"
+        TEXT[useful_commands]="Useful commands:"
+        TEXT[test_cmd]="Test: curl {1}"
+        TEXT[download_cmd]="Download: wget {1}"
+        TEXT[list_cmd]="List files: ls -la \"{1}\""
     else
         # Português (padrão)
         TEXT[menu_title]="TUNNEL MANAGER v$VERSION"
@@ -119,13 +127,20 @@ load_language() {
         TEXT[http_started]="HTTP Server iniciado (PID: {1})"
         TEXT[tunnel_created]="✅ TÚNEL CRIADO COM SUCESSO!"
         TEXT[tunnel_url]="URL: {1}"
-        TEXT[local_url]="Local: http://localhost:{2}"
-        TEXT[server_dir]="Diretório: {3}"
+        TEXT[local_url]="Local: http://localhost:{1}"
+        TEXT[server_dir]="Diretório: {1}"
         TEXT[checking_deps]="Verificando dependências..."
         TEXT[python_found]="Python3 encontrado"
         TEXT[cloudflared_found]="Cloudflared encontrado"
         TEXT[cloudflared_not_found]="Cloudflared não encontrado"
         TEXT[downloading_cf]="Baixando Cloudflared..."
+        TEXT[waiting_url]="Aguardando URL do Cloudflared..."
+        TEXT[press_ctrl_c]="Pressione Ctrl+C para parar"
+        TEXT[files_in_dir]="Arquivos no diretório:"
+        TEXT[useful_commands]="Comandos úteis:"
+        TEXT[test_cmd]="Testar: curl {1}"
+        TEXT[download_cmd]="Download: wget {1}"
+        TEXT[list_cmd]="Listar arquivos: ls -la \"{1}\""
     fi
 }
 
@@ -182,8 +197,8 @@ show_menu() {
     case $option in
         1) start_tunnel ;;
         2) start_current_dir_tunnel ;;
-        3) echo -e "\n${YELLOW}Função em desenvolvimento...${NC}"; sleep 1; show_menu ;;
-        4) echo -e "\n${YELLOW}Função em desenvolvimento...${NC}"; sleep 1; show_menu ;;
+        3) show_active_tunnels ;;
+        4) show_logs ;;
         5) stop_all_tunnels ;;
         6) install_cloudflared_system ;;
         7) show_config ;;
@@ -262,24 +277,12 @@ start_tunnel() {
     check_dependencies
     
     # Criar página HTML simples
-    if [ ! -f "$DIR/index.html" ]; then
-        cat > "$DIR/index.html" << HTML
-<!DOCTYPE html>
-<html>
-<head><title>Tunnel on port $PORT</title></head>
-<body>
-<h1>🚀 Tunnel Active - Port $PORT</h1>
-<p>Server directory: $DIR</p>
-<p>Created with Tunnel Manager v$VERSION</p>
-</body>
-</html>
-HTML
-    fi
+    create_index_page "$PORT" "$DIR"
     
     # Iniciar servidor HTTP
     echo -e "${CYAN}[*] $(get_text starting_http "$PORT")${NC}"
     cd "$DIR"
-    python3 -m http.server "$PORT" > /tmp/tunnel-http.log 2>&1 &
+    python3 -m http.server "$PORT" > "$LOG_DIR/http-server.log" 2>&1 &
     HTTP_PID=$!
     echo $HTTP_PID > "$PID_FILE"
     
@@ -291,21 +294,226 @@ HTML
         return 1
     fi
     
+    # Configurar trap para Ctrl+C
+    trap 'cleanup' INT TERM
+    
     # Iniciar Cloudflared
     echo -e "${CYAN}[*] Iniciando Cloudflared Tunnel...${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${BOLD}Aguardando URL do Cloudflared...${NC}"
-    echo -e "${CYAN}Pressione Ctrl+C para parar${NC}"
+    echo -e "${BOLD}${MAGENTA}[*] $(get_text waiting_url)${NC}"
+    echo -e "${CYAN}[*] $(get_text press_ctrl_c)${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
     
-    # Executar Cloudflared
+    # Executar Cloudflared e capturar a URL em tempo real
     if command -v cloudflared &> /dev/null; then
-        cloudflared tunnel --url "http://localhost:$PORT"
+        CLOUDFLARED_CMD="cloudflared"
     elif [ -f "/tmp/cloudflared" ]; then
-        /tmp/cloudflared tunnel --url "http://localhost:$PORT"
+        CLOUDFLARED_CMD="/tmp/cloudflared"
     else
         echo -e "${RED}[!] Cloudflared não encontrado${NC}"
         return 1
+    fi
+    
+    # Usar pipe nomeado para capturar output
+    PIPE_FILE=$(mktemp -u)
+    mkfifo "$PIPE_FILE"
+    
+    # Executar Cloudflared em background, redirecionando output para pipe
+    $CLOUDFLARED_CMD tunnel --url "http://localhost:$PORT" 2>&1 | tee "$PIPE_FILE" &
+    CLOUDFLARED_PID=$!
+    
+    # Processar output em tempo real
+    TUNNEL_URL=""
+    while read -r line; do
+        echo "$line"
+        
+        # Extrair URL quando aparecer
+        if [[ $line == *"https://"*".trycloudflare.com"* ]]; then
+            TUNNEL_URL=$(echo "$line" | grep -o 'https://[^ ]*\.trycloudflare\.com')
+            if [ ! -z "$TUNNEL_URL" ]; then
+                echo -e "\n${GREEN}═══════════════════════════════════════════════════════════${NC}"
+                echo -e "${BOLD}${GREEN}$(get_text tunnel_created)${NC}"
+                echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+                echo -e "${BOLD}$(get_text tunnel_url "$TUNNEL_URL")${NC}"
+                echo -e "${BOLD}$(get_text local_url "$PORT")${NC}"
+                echo -e "${BOLD}$(get_text server_dir "$DIR")${NC}"
+                echo -e "${BOLD}$(get_text files_in_dir)${NC}"
+                ls -la "$DIR" | head -10
+                echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+                echo -e "${CYAN}$(get_text useful_commands)${NC}"
+                echo -e "  $(get_text test_cmd "$TUNNEL_URL")"
+                echo -e "  $(get_text download_cmd "$TUNNEL_URL")"
+                echo -e "  $(get_text local_url "$PORT")"
+                echo -e "  $(get_text list_cmd "$DIR")"
+                echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+                
+                # Salvar URL para uso futuro
+                echo "$TUNNEL_URL" > "$LOG_DIR/last_tunnel.url"
+                echo "URL: $TUNNEL_URL" > "$LOG_DIR/tunnel_info.txt"
+                echo "Porta: $PORT" >> "$LOG_DIR/tunnel_info.txt"
+                echo "Diretório: $DIR" >> "$LOG_DIR/tunnel_info.txt"
+                echo "Data: $(date)" >> "$LOG_DIR/tunnel_info.txt"
+            fi
+        fi
+    done < "$PIPE_FILE"
+    
+    # Limpar
+    rm -f "$PIPE_FILE"
+    wait $CLOUDFLARED_PID
+    cleanup
+}
+
+create_index_page() {
+    local port=$1
+    local dir=$2
+    
+    if [ ! -f "$dir/index.html" ]; then
+        cat > "$dir/index.html" << HTML
+<!DOCTYPE html>
+<html lang="${LANGUAGE}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Tunnel Cloudflared - Porta $port</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+        }
+        h1 { 
+            font-size: 2.5rem; 
+            margin-bottom: 20px; 
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+        .url-box {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            font-size: 1.2rem;
+        }
+        .info {
+            display: flex;
+            justify-content: space-around;
+            margin: 30px 0;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .info-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            min-width: 150px;
+        }
+        .info-item h3 {
+            color: #c4b5fd;
+            margin-bottom: 10px;
+        }
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 12px 24px;
+            background: #4f46e5;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+        }
+        .btn:hover {
+            background: #4338ca;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Tunnel Cloudflared</h1>
+        <p>Seu servidor está rodando e acessível através do túnel Cloudflare.</p>
+        
+        <div class="info">
+            <div class="info-item">
+                <h3>📍 Porta</h3>
+                <p>$port</p>
+            </div>
+            <div class="info-item">
+                <h3>📁 Diretório</h3>
+                <p>${dir##*/}</p>
+            </div>
+            <div class="info-item">
+                <h3>📡 Status</h3>
+                <p style="color: #10b981;">● ONLINE</p>
+            </div>
+        </div>
+        
+        <h2>🔗 URL do Túnel:</h2>
+        <div class="url-box" id="url-display">
+            Aguardando URL do Cloudflared...
+        </div>
+        
+        <div class="buttons">
+            <button class="btn" onclick="copyURL()">📋 Copiar URL</button>
+            <button class="btn" onclick="refreshPage()">🔄 Atualizar</button>
+        </div>
+        
+        <p style="margin-top: 30px; opacity: 0.8; font-size: 0.9rem;">
+            Criado com Tunnel Manager v$VERSION • $(date +'%d/%m/%Y %H:%M')
+        </p>
+    </div>
+    
+    <script>
+        function copyURL() {
+            const url = document.getElementById('url-display').innerText;
+            navigator.clipboard.writeText(url).then(() => {
+                alert('URL copiada para a área de transferência!');
+            });
+        }
+        
+        function refreshPage() {
+            location.reload();
+        }
+        
+        // Tentar detectar URL automaticamente
+        setTimeout(() => {
+            const path = window.location.href;
+            if (path.includes('trycloudflare.com')) {
+                document.getElementById('url-display').innerText = path;
+            }
+        }, 2000);
+    </script>
+</body>
+</html>
+HTML
     fi
 }
 
@@ -359,8 +567,20 @@ download_cloudflared() {
     fi
 }
 
+cleanup() {
+    echo -e "\n${YELLOW}[*] Parando serviços...${NC}"
+    if [ -f "$PID_FILE" ]; then
+        HTTP_PID=$(cat "$PID_FILE")
+        kill $HTTP_PID 2>/dev/null
+        rm -f "$PID_FILE"
+    fi
+    pkill -f "cloudflared" 2>/dev/null
+    echo -e "${GREEN}[+] Serviços parados${NC}"
+    exit 0
+}
+
 stop_all_tunnels() {
-    echo -e "${YELLOW}[*] Parando todos os túneis...${NC}"
+    echo -e "\n${YELLOW}[*] Parando todos os túneis...${NC}"
     pkill -f "http.server" 2>/dev/null
     pkill -f "cloudflared" 2>/dev/null
     [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
@@ -380,6 +600,71 @@ install_cloudflared_system() {
     sudo chmod +x "/usr/local/bin/cloudflared"
     echo -e "${GREEN}[+] Cloudflared instalado em /usr/local/bin/cloudflared${NC}"
     sleep 2
+    show_menu
+}
+
+show_active_tunnels() {
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${WHITE}TÚNEIS ATIVOS${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+    
+    # Verificar servidores HTTP
+    if pgrep -f "http.server" > /dev/null; then
+        echo -e "${GREEN}✓ HTTP Servers:${NC}"
+        pgrep -f "http.server" | while read pid; do
+            port=$(ps -p $pid -o args= | grep -o '[0-9]*' | head -1)
+            dir=$(ps -p $pid -o args= | grep -o 'http.server.*' | awk '{print $2}' | xargs dirname 2>/dev/null || echo "desconhecido")
+            echo -e "  PID: $pid | Porta: $port | Diretório: $dir"
+        done
+    else
+        echo -e "${YELLOW}⚠ Nenhum HTTP Server ativo${NC}"
+    fi
+    
+    # Verificar Cloudflared
+    if pgrep -f "cloudflared" > /dev/null; then
+        echo -e "\n${GREEN}✓ Cloudflared Tunnels:${NC}"
+        pgrep -f "cloudflared" | while read pid; do
+            cmd=$(ps -p $pid -o args=)
+            echo -e "  PID: $pid"
+            echo "  Comando: $cmd" | head -1
+        done
+    else
+        echo -e "\n${YELLOW}⚠ Nenhum Cloudflared Tunnel ativo${NC}"
+    fi
+    
+    # Mostrar última URL
+    if [ -f "$LOG_DIR/last_tunnel.url" ]; then
+        echo -e "\n${GREEN}✓ Última URL gerada:${NC}"
+        echo -e "  $(cat $LOG_DIR/last_tunnel.url)"
+    fi
+    
+    if [ -f "$LOG_DIR/tunnel_info.txt" ]; then
+        echo -e "\n${GREEN}✓ Informações do último túnel:${NC}"
+        cat "$LOG_DIR/tunnel_info.txt"
+    fi
+    
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+    read -n 1 -s -r -p "$(get_text press_any_key)"
+    show_menu
+}
+
+show_logs() {
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${WHITE}LOGS DISPONÍVEIS${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+    
+    if [ -d "$LOG_DIR" ]; then
+        echo -e "${CYAN}Arquivos de log:${NC}"
+        find "$LOG_DIR" -type f -name "*.log" -o -name "*.txt" -o -name "*.url" | while read file; do
+            size=$(du -h "$file" | cut -f1)
+            modified=$(stat -c %y "$file" | cut -d' ' -f1-2)
+            echo -e "  $(basename "$file") - $size - $modified"
+        done
+    else
+        echo -e "${YELLOW}Nenhum log disponível${NC}"
+    fi
+    
+    read -n 1 -s -r -p "$(get_text press_any_key)"
     show_menu
 }
 
@@ -438,8 +723,9 @@ change_language() {
 # INICIALIZAÇÃO
 # =============================================================================
 
-# Garantir diretório de logs
+# Garantir diretórios
 mkdir -p "$LOG_DIR"
+mkdir -p "$(dirname "$CONFIG_FILE")"
 
 # Carregar configuração
 if [ -f "$CONFIG_FILE" ]; then
@@ -459,9 +745,14 @@ if [ $# -ge 1 ]; then
         DIR=$(pwd)
     fi
     check_dependencies
+    create_index_page "$PORT" "$DIR"
     echo -e "${GREEN}[+] Iniciando túnel na porta $PORT, diretório: $DIR${NC}"
     cd "$DIR"
     python3 -m http.server "$PORT" &
+    HTTP_PID=$!
+    echo $HTTP_PID > "$PID_FILE"
+    echo -e "${GREEN}[+] Servidor HTTP iniciado (PID: $HTTP_PID)${NC}"
+    echo -e "${CYAN}[*] Iniciando Cloudflared...${NC}"
     cloudflared tunnel --url "http://localhost:$PORT"
 else
     # Modo interativo
