@@ -1,6 +1,20 @@
-# tunnels/Ngrok.py - plugin for ngrok tunnel
+# tunnels/Ngrok.py - plugin portátil para ngrok
 import shutil, subprocess, threading, re, os, time, json
 from pathlib import Path
+
+def get_autotunnel_data_dir():
+    """Get portable data directory - matches AutoTunnel.py"""
+    xdg_data_home = os.environ.get('XDG_DATA_HOME')
+    if xdg_data_home:
+        return Path(xdg_data_home) / "autotunnel"
+    return Path.home() / ".local" / "share" / "autotunnel"
+
+def get_autotunnel_config_dir():
+    """Get portable config directory - matches AutoTunnel.py"""
+    xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
+    if xdg_config_home:
+        return Path(xdg_config_home) / "autotunnel"
+    return Path.home() / ".config" / "autotunnel"
 
 class TunnelPlugin:
     def __init__(self):
@@ -8,59 +22,57 @@ class TunnelPlugin:
         self.pid = None
         self.url = None
         self._reader_thread = None
-        # log path
-        self.log_path = Path.home() / ".local" / "share" / "autotunnel" / "logs" / "ngrok.log"
+        
+        # Use portable paths
+        data_dir = get_autotunnel_data_dir()
+        self.log_path = data_dir / "logs" / "ngrok.log"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        # config path
-        self.config_path = Path.home() / ".config" / "autotunnel" / "config.json"
+        
+        self.config_dir = get_autotunnel_config_dir()
 
     def name(self):
         return "ngrok"
 
     def _get_auth_token(self):
-        """Get ngrok auth token from config or environment"""
-        if self.config_path.exists():
+        """Get ngrok token from config"""
+        config_file = self.config_dir / "config.json"
+        if config_file.exists():
             try:
-                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-                token = cfg.get("ngrok_auth_token")
-                if token:
-                    return token
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get("ngrok_auth_token", "")
             except:
                 pass
-        return os.environ.get("NGROK_AUTH_TOKEN", "")
+        return ""
 
     def installed(self):
-        """Check if ngrok is installed and configured"""
-        # Check binary
-        binp = shutil.which("ngrok")
-        if not binp:
-            alt = Path.home() / ".local" / "share" / "autotunnel" / "bin" / "ngrok"
-            if not alt.exists():
-                return False
-            binp = str(alt)
+        # Check if binary exists
+        if shutil.which("ngrok"):
+            # Also need token
+            return bool(self._get_auth_token())
         
-        # Check if we have auth token
-        token = self._get_auth_token()
-        if not token:
-            return False
+        # Check autotunnel local bin
+        data_dir = get_autotunnel_data_dir()
+        local_bin = data_dir / "bin" / "ngrok"
+        if local_bin.exists():
+            return bool(self._get_auth_token())
         
-        return True
+        return False
 
     def install(self):
-        """Install ngrok - will be called from main AutoTunnel"""
-        # Installation is handled by install_ngrok_auto in main script
-        return True
+        # Installation handled by main AutoTunnel
+        return False
 
     def _write_log(self, line: str):
-        """Write log entry to file"""
+        """Write to log file"""
         try:
             with self.log_path.open("a", encoding="utf-8") as f:
-                f.write(line.rstrip() + "\n")
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {line}\n")
         except Exception:
             pass
 
     def _reader(self):
-        """Read output from ngrok process and extract URL"""
+        """Read process output and extract URL"""
         if not self.proc or not self.proc.stdout:
             return
         
@@ -71,67 +83,67 @@ class TunnelPlugin:
             line = line.rstrip("\n")
             self._write_log(line)
             
-            # Extract ngrok URL - multiple patterns for different ngrok versions
+            # Extract ngrok URL
             patterns = [
                 r"Forwarding\s+(https://[^\s]+\.ngrok\.io)\s+->",
-                r"addr=https://([^\s]+\.ngrok\.io)",
                 r"URL:\s+(https://[^\s]+\.ngrok\.io)",
+                r"addr=https://([^\s]+\.ngrok\.io)",
                 r"https://[^\s]+\.ngrok\.io"
             ]
             
             for pattern in patterns:
                 match = re.search(pattern, line)
                 if match:
-                    if "->" in line or "URL:" in line or "addr=" in line:
-                        # Full line with context
-                        url = match.group(1) if match.groups() else match.group(0)
-                        if not url.startswith("http"):
-                            url = f"https://{url}"
+                    url = match.group(1) if match.groups() else match.group(0)
+                    if not url.startswith("http"):
+                        url = f"https://{url}"
+                    
+                    if not self.url:
                         self.url = url
-                        self._write_log(f"[INFO] URL encontrada: {self.url}")
-                    else:
-                        # Just the URL in the line
-                        self.url = match.group(0)
-                        self._write_log(f"[INFO] URL encontrada: {self.url}")
+                        self._write_log(f"URL encontrada: {url}")
                     break
-            
-            # Also check for error messages
-            if "error" in line.lower() or "failed" in line.lower():
-                self._write_log(f"[ERROR] {line}")
 
     def start(self, local_port: int):
-        """Start ngrok tunnel"""
         if self.proc:
-            self._write_log("[WARN] Ngrok já está em execução")
             return
         
-        # Find ngrok binary
-        binp = shutil.which("ngrok")
-        if not binp:
-            alt = Path.home() / ".local" / "share" / "autotunnel" / "bin" / "ngrok"
-            if not alt.exists():
-                self._write_log("[ERROR] Ngrok não encontrado")
-                return
-            binp = str(alt)
+        # Find ngrok binary (portable)
+        bin_path = None
+        
+        # Check system PATH
+        bin_path = shutil.which("ngrok")
+        
+        # Check autotunnel local bin
+        if not bin_path:
+            data_dir = get_autotunnel_data_dir()
+            local_bin = data_dir / "bin" / "ngrok"
+            if local_bin.exists():
+                bin_path = str(local_bin)
+        
+        if not bin_path:
+            self._write_log("ERRO: ngrok não encontrado")
+            return
         
         # Get auth token
         token = self._get_auth_token()
         if not token:
-            self._write_log("[ERROR] Token de autenticação do ngrok não configurado")
+            self._write_log("ERRO: Token ngrok não configurado")
             return
         
-        # Clear previous URL
-        self.url = None
+        self._write_log(f"Iniciando ngrok na porta {local_port}")
         
-        # Start ngrok
-        cmd = [binp, "http", str(local_port)]
+        # Configure token if needed
+        config_result = subprocess.run(
+            [bin_path, "config", "add-authtoken", token],
+            capture_output=True,
+            text=True
+        )
         
-        # Set environment with auth token
-        env = os.environ.copy()
-        env["NGROK_AUTH_TOKEN"] = token
+        if config_result.returncode != 0:
+            self._write_log(f"AVISO: Falha ao configurar token: {config_result.stderr[:100]}")
         
-        self._write_log(f"[INFO] Iniciando ngrok na porta {local_port}")
-        self._write_log(f"[INFO] Comando: {' '.join(cmd)}")
+        # Start ngrok tunnel
+        cmd = [bin_path, "http", str(local_port)]
         
         try:
             self.proc = subprocess.Popen(
@@ -139,47 +151,43 @@ class TunnelPlugin:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1,
-                env=env
+                bufsize=1
             )
             self.pid = self.proc.pid
-            self._write_log(f"[INFO] Ngrok iniciado com PID: {self.pid}")
+            self._write_log(f"Processo iniciado com PID: {self.pid}")
             
             # Start reader thread
             self._reader_thread = threading.Thread(target=self._reader, daemon=True)
             self._reader_thread.start()
             
         except Exception as e:
-            self._write_log(f"[ERROR] Falha ao iniciar ngrok: {str(e)}")
+            self._write_log(f"ERRO ao iniciar: {str(e)}")
             self.proc = None
 
     def stop(self):
-        """Stop ngrok tunnel"""
         if not self.proc:
             return False
         
-        self._write_log(f"[INFO] Parando ngrok (PID: {self.pid})")
+        self._write_log("Parando ngrok...")
         
         try:
-            # Try graceful termination
             self.proc.terminate()
             
-            # Wait for process to end
-            for _ in range(10):  # 5 seconds max
+            # Wait for termination
+            for _ in range(10):
                 if self.proc.poll() is not None:
                     break
                 time.sleep(0.5)
             
             # Force kill if still running
             if self.proc.poll() is None:
-                self._write_log("[WARN] Forçando término do ngrok")
                 self.proc.kill()
                 self.proc.wait(timeout=2)
             
-            self._write_log(f"[INFO] Ngrok parado")
+            self._write_log("ngrok parado")
             
         except Exception as e:
-            self._write_log(f"[ERROR] Erro ao parar ngrok: {str(e)}")
+            self._write_log(f"ERRO ao parar: {str(e)}")
             return False
         finally:
             self.proc = None
@@ -187,14 +195,3 @@ class TunnelPlugin:
             self.url = None
         
         return True
-
-    def status(self):
-        """Get current status"""
-        is_running = self.proc and self.proc.poll() is None
-        return {
-            "running": is_running,
-            "pid": self.pid,
-            "url": self.url,
-            "installed": self.installed(),
-            "log_file": str(self.log_path)
-        }

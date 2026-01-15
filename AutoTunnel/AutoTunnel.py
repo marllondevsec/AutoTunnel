@@ -1,32 +1,131 @@
 #!/usr/bin/env python3
 """
-AutoTunnel - Minimal, numeric menus, colored (rich), auto-install cloudflared/ngrok,
-and default to the user's current working directory (pwd).
+AutoTunnel - Minimal, numeric menus, colored (rich), auto-install cloudflared/ngrok.
+Completely portable - no fixed hostnames or absolute paths.
 """
 import os, sys, json, shutil, subprocess, threading, time, re, importlib.util
 from pathlib import Path
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import datetime
 
-# ---------------- Paths / config ----------------
-HOME = Path.home()
-CONFIG_DIR = HOME / ".config" / "autotunnel"
+# ---------------- ASCII Art ----------------
+ASCII_ART = r"""
+._____. ._____.
+| ._. | | ._. |
+| !_| |_|_|_! |
+!___| |_______!
+.___|_|_| |___.
+| ._____| |_. |
+| !_! | | !_! |
+!_____! !_____!
+  /$$$$$$              /$$            /$$$$$$$$                                      /$$
+ /$$__  $$            | $$           |__  $$__/                                     | $$
+| $$  \ $$ /$$   /$$ /$$$$$$    /$$$$$$ | $$ /$$   /$$ /$$$$$$$  /$$$$$$$   /$$$$$$ | $$
+| $$$$$$$$| $$  | $$|_  $$_/   /$$__  $$| $$| $$  | $$| $$__  $$| $$__  $$ /$$__  $$| $$
+| $$__  $$| $$  | $$  | $$    | $$  \ $$| $$| $$  | $$| $$  \ $$| $$  \ $$| $$$$$$$$| $$
+| $$  | $$| $$  | $$  | $$ /$$| $$  | $$| $$| $$  | $$| $$  | $$| $$  | $$| $$_____/| $$
+| $$  | $$|  $$$$$$/  |  $$$$/|  $$$$$$/| $$|  $$$$$$/| $$  | $$| $$  | $$|  $$$$$$$| $$
+|__/  |__/ \______/    \___/   \______/ |__/ \______/ |__/  |__/|__/  |__/ \_______/|__/
+"""
+
+# ---------------- Portable Paths / config ----------------
+def get_user_data_dir():
+    """Get portable user data directory"""
+    xdg_data_home = os.environ.get('XDG_DATA_HOME')
+    if xdg_data_home:
+        return Path(xdg_data_home) / "autotunnel"
+    return Path.home() / ".local" / "share" / "autotunnel"
+
+def get_user_config_dir():
+    """Get portable user config directory"""
+    xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
+    if xdg_config_home:
+        return Path(xdg_config_home) / "autotunnel"
+    return Path.home() / ".config" / "autotunnel"
+
+def to_portable_path(path_str):
+    """
+    Convert absolute path to portable format.
+    If path is in home directory, convert to ~/ format.
+    Otherwise, return as relative path if possible.
+    """
+    if not path_str:
+        return ""
+    
+    try:
+        path = Path(path_str).expanduser().resolve()
+        home = Path.home()
+        
+        # Try to make path relative to home
+        try:
+            if path.is_relative_to(home):
+                return "~/" + str(path.relative_to(home))
+        except ValueError:
+            pass
+        
+        # Try to make path relative to current directory
+        try:
+            cwd = Path.cwd()
+            if path.is_relative_to(cwd):
+                rel_path = path.relative_to(cwd)
+                return "./" + str(rel_path) if str(rel_path) != "." else "."
+        except ValueError:
+            pass
+        
+        # Return absolute path as last resort
+        return str(path)
+    except Exception:
+        return path_str
+
+def from_portable_path(portable_path_str):
+    """
+    Convert portable path to absolute path.
+    Handles ~/, ./, and absolute paths.
+    """
+    if not portable_path_str:
+        return Path.cwd()
+    
+    try:
+        path_str = str(portable_path_str)
+        
+        # Expand ~ to home directory
+        if path_str.startswith("~"):
+            return Path(path_str).expanduser().resolve()
+        
+        # Handle relative paths starting with .
+        if path_str.startswith(".") or not Path(path_str).is_absolute():
+            # Check if it's relative to current directory
+            abs_path = (Path.cwd() / path_str).resolve()
+            if abs_path.exists():
+                return abs_path
+            # If not, try to expand user (in case it's something like "Documents")
+            return Path(path_str).expanduser().resolve()
+        
+        # Already absolute
+        return Path(path_str).expanduser().resolve()
+    except Exception:
+        # Fallback to current directory
+        return Path.cwd()
+
+# Define all paths using portable functions
+CONFIG_DIR = get_user_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
-DATA_DIR = HOME / ".local" / "share" / "autotunnel"
+DATA_DIR = get_user_data_dir()
 LOG_DIR = DATA_DIR / "logs"
 PID_DIR = DATA_DIR / "pids"
-PLUGIN_DIR = Path(__file__).parent / "tunnels"
-LANG_DIR = Path(__file__).parent / "lang"
+SCRIPT_DIR = Path(__file__).parent
+PLUGIN_DIR = SCRIPT_DIR / "tunnels"
+LANG_DIR = SCRIPT_DIR / "lang"
 LOCAL_BIN = DATA_DIR / "bin"
 
 for d in (CONFIG_DIR, DATA_DIR, LOG_DIR, PID_DIR, LOCAL_BIN):
     d.mkdir(parents=True, exist_ok=True)
 
-# Default config: note default_dir uses current working directory (pwd)
+# Default config - uses portable paths
 DEFAULT_CONFIG = {
     "language": "pt",
     "default_port": 1337,
-    "default_dir": str(Path.cwd()),
+    "default_dir": "",  # Empty by default - will be set with portable path
     "installed_tunnels": {},
     "ngrok_auth_token": ""
 }
@@ -56,27 +155,34 @@ else:
 
 # ---------------- Config / i18n ----------------
 def load_config():
+    """Load configuration, ensuring portability"""
     if CONFIG_PATH.exists():
         try:
             cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            # ensure default_dir is at least current cwd if missing or invalid
-            default_dir = cfg.get("default_dir", "")
-            if not default_dir or not Path(default_dir).exists():
-                cfg["default_dir"] = str(Path.cwd())
+            
+            # Convert any absolute paths in default_dir to portable format
+            if "default_dir" in cfg and cfg["default_dir"]:
+                cfg["default_dir"] = to_portable_path(cfg["default_dir"])
+            
+            # Ensure default_dir exists
+            if cfg.get("default_dir"):
+                abs_path = from_portable_path(cfg["default_dir"])
+                if not abs_path.exists():
+                    # Try to create it
+                    try:
+                        abs_path.mkdir(parents=True, exist_ok=True)
+                    except:
+                        # Reset to current directory
+                        cfg["default_dir"] = to_portable_path(str(Path.cwd()))
+            
             return cfg
         except Exception:
+            # Corrupted config, create new
             pass
     
-    # Try to set a reasonable default directory
-    cwd = str(Path.cwd())
-    # Check if we're in a web directory
-    web_dirs = ['public', 'www', 'htdocs', 'html', 'src', 'dist', 'build']
-    for web_dir in web_dirs:
-        if Path(cwd, web_dir).exists():
-            cwd = str(Path(cwd, web_dir))
-            break
-    
-    DEFAULT_CONFIG["default_dir"] = cwd
+    # Create config with current directory as portable path
+    current_portable = to_portable_path(str(Path.cwd()))
+    DEFAULT_CONFIG["default_dir"] = current_portable
     CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
     return DEFAULT_CONFIG.copy()
 
@@ -96,21 +202,19 @@ def tr(key, *args):
         s = s.replace("{" + str(i) + "}", str(a))
     return s
 
-# ---------------- Custom HTTP Handler to suppress logs ----------------
+# ---------------- Custom HTTP Handler ----------------
 class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Only log to file, not to console
         log_entry = "%s - - [%s] %s\n" % (
             self.address_string(),
             self.log_date_time_string(),
             format % args
         )
-        # Write to HTTP server log file
         log_path = LOG_DIR / "http_server.log"
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(log_entry)
 
-# ---------------- HttpServer minimal ----------------
+# ---------------- HttpServer ----------------
 class HttpServer:
     def __init__(self):
         self.httpd = None
@@ -123,17 +227,16 @@ class HttpServer:
         if self.httpd:
             return False
         
-        # Validate and resolve directory
-        dir_path = Path(directory).expanduser()
-        if not dir_path.exists():
-            # Try to create directory
-            try:
-                dir_path.mkdir(parents=True, exist_ok=True)
-                # Create a simple index.html if directory is empty
-                index_file = dir_path / "index.html"
-                if not index_file.exists():
-                    index_file.write_text(f"""
-<!DOCTYPE html>
+        # Convert portable path to absolute
+        try:
+            dir_path = from_portable_path(directory)
+            if not dir_path.exists():
+                try:
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                    # Create default index.html
+                    index_file = dir_path / "index.html"
+                    if not index_file.exists():
+                        index_file.write_text(f'''<!DOCTYPE html>
 <html>
 <head><title>AutoTunnel Server</title></head>
 <body>
@@ -142,35 +245,33 @@ class HttpServer:
     <p>Directory: {dir_path}</p>
     <p>Started at: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
 </body>
-</html>
-                    """)
-            except Exception as e:
-                cprint(f"Erro criando diretório {dir_path}: {e}", "red")
-                return False
+</html>''')
+                except Exception as e:
+                    cprint(f"Erro criando diretório {dir_path}: {e}", "red")
+                    return False
+        except Exception as e:
+            cprint(f"Erro no caminho {directory}: {e}", "red")
+            return False
         
-        directory = str(dir_path.resolve())
-        
-        # Clear old log
         if self.log_path.exists():
             self.log_path.unlink()
         
-        handler = lambda *args, **kwargs: QuietHTTPRequestHandler(*args, directory=directory, **kwargs)
+        handler = lambda *args, **kwargs: QuietHTTPRequestHandler(*args, directory=str(dir_path), **kwargs)
         self.httpd = ThreadingHTTPServer(("", int(port)), handler)
         self.port = port
-        self.directory = directory
+        self.directory = str(dir_path)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         
         (PID_DIR / "http_server.json").write_text(json.dumps({
             "pid": os.getpid(),
             "port": port,
-            "dir": directory,
+            "dir": to_portable_path(str(dir_path)),
             "start_time": datetime.datetime.now().isoformat()
         }))
         
-        # Log startup
         with open(self.log_path, 'a', encoding='utf-8') as f:
-            f.write(f"[{datetime.datetime.now().isoformat()}] HTTP Server started on port {port}, directory: {directory}\n")
+            f.write(f"[{datetime.datetime.now().isoformat()}] HTTP Server started on port {port}, directory: {dir_path}\n")
         
         return True
 
@@ -191,7 +292,6 @@ class HttpServer:
         return True
     
     def get_logs(self, lines=20):
-        """Return last n lines of server logs"""
         if not self.log_path.exists():
             return []
         with open(self.log_path, 'r', encoding='utf-8') as f:
@@ -201,13 +301,13 @@ class HttpServer:
 http_server = HttpServer()
 
 # ---------------- Plugin loader ----------------
-PLUGINS = {}  # index(int) -> (name, instance)
+PLUGINS = {}
 def load_plugins():
     PLUGINS.clear()
     if not PLUGIN_DIR.exists():
         return
     
-    # Always load Cloudflared
+    # Load Cloudflared
     try:
         spec = importlib.util.spec_from_file_location(
             "autotunnel.plugins.cloudflared",
@@ -220,7 +320,7 @@ def load_plugins():
     except Exception as e:
         cprint(f"Error loading Cloudflared plugin: {e}", "yellow")
     
-    # Try to load Ngrok if file exists
+    # Load Ngrok if exists
     ngrok_path = PLUGIN_DIR / "Ngrok.py"
     if ngrok_path.exists():
         try:
@@ -247,7 +347,6 @@ def load_plugins():
         try:
             spec.loader.exec_module(mod)
         except Exception as e:
-            cprint(f"Erro carregando plugin {name}: {e}", "yellow")
             continue
         
         if hasattr(mod, "TunnelPlugin"):
@@ -255,8 +354,8 @@ def load_plugins():
                 inst = mod.TunnelPlugin()
                 PLUGINS[idx] = (inst.name(), inst)
                 idx += 1
-            except Exception as e:
-                cprint(f"Erro inicializando plugin {name}: {e}", "yellow")
+            except Exception:
+                continue
 
 # ---------------- Utils UI ----------------
 def cprint(text, style=None, end="\n"):
@@ -274,15 +373,14 @@ def clear_screen():
 def print_header():
     clear_screen()
     if console:
-        console.print(Panel("[bold cyan]AutoTunnel[/bold cyan]\n[green]Servidor rápido + túnel (cloudflared/ngrok)[/green]"), justify="center")
+        # Print ASCII art in cyan
+        console.print("[bold cyan]" + ASCII_ART + "[/bold cyan]")
+        console.print(Panel("[bold cyan]AutoTunnel[/bold cyan]\n[green]Servidor rápido + túnel (cloudflared/ngrok)[/green]\n[dim]Portable • Configurações salvas em formato universal[/dim]"), justify="center")
     else:
-        print("\n=== AutoTunnel ===\nServidor rápido + túnel (cloudflared/ngrok)\n")
+        print(ASCII_ART)
+        print("\n=== AutoTunnel ===\nServidor rápido + túnel (cloudflared/ngrok)\nPortable • Configurações salvas em formato universal\n")
 
 def numeric_choice(prompt_text, options):
-    """
-    options: list of strings
-    prints numbered options, returns selected index (1-based) or None
-    """
     if console:
         table = Table.grid(padding=(0,1))
         for i,opt in enumerate(options, start=1):
@@ -301,188 +399,223 @@ def numeric_choice(prompt_text, options):
         pass
     return None
 
-# ---------------- Directory selection (improved) ----------------
+# ---------------- Directory selection (PORTABLE) ----------------
 def choose_dir():
-    """Improved directory selection with validation"""
-    cwd = str(Path.cwd())
-    default_dir = cfg.get("default_dir", cwd)
+    """Portable directory selection"""
+    current_dir = Path.cwd()
+    current_portable = to_portable_path(str(current_dir))
     
-    # Check if default directory exists
-    if not Path(default_dir).exists():
-        cprint(f"Diretório padrão não existe: {default_dir}", "yellow")
-        # Try to create it
-        try:
-            Path(default_dir).mkdir(parents=True, exist_ok=True)
-            cprint(f"Diretório criado: {default_dir}", "green")
-        except Exception as e:
-            cprint(f"Erro criando diretório {default_dir}: {e}", "red")
-            default_dir = cwd
+    # Get default directory (already in portable format)
+    default_dir_portable = cfg.get("default_dir", current_portable)
+    default_dir_absolute = from_portable_path(default_dir_portable)
+    
+    # Check if default exists
+    if default_dir_portable and not default_dir_absolute.exists():
+        cprint(f"⚠️  Diretório padrão não existe: {default_dir_portable}", "yellow")
+        default_dir_portable = current_portable
+        default_dir_absolute = current_dir
     
     while True:
         print_header()
-        cprint(f"Diretório atual: {cwd}", "cyan")
-        cprint(f"Diretório padrão: {default_dir}", "cyan")
+        cprint(f"📁 Diretório atual: [cyan]{current_portable}[/cyan]", "white")
+        if default_dir_portable != current_portable:
+            cprint(f"⭐ Diretório padrão: [yellow]{default_dir_portable}[/yellow]", "white")
         
         opts = [
-            "Diretório atual (PWD)",
-            "Diretório padrão",
-            "Especificar outro diretório",
-            "Criar novo diretório",
-            "Voltar"
+            f"📂 Usar diretório atual ([cyan]{current_portable}[/cyan])",
+            f"📂 Usar diretório padrão ([yellow]{default_dir_portable}[/yellow])" if default_dir_portable != current_portable else "📂 Definir diretório atual como padrão",
+            "🔍 Escolher outro diretório",
+            "🆕 Criar novo diretório",
+            "⬅️  Voltar"
         ]
         
-        sel = numeric_choice("Escolha diretório:", opts)
+        sel = numeric_choice("Escolha uma opção:", opts)
         
         if sel == 1:
-            return cwd
+            return str(current_dir)  # Return absolute for server
+        
         elif sel == 2:
-            return default_dir
+            if default_dir_portable != current_portable:
+                return str(default_dir_absolute)
+            else:
+                # Set current as default
+                cfg["default_dir"] = current_portable
+                save_config()
+                cprint(f"✅ Diretório padrão definido como: {current_portable}", "green")
+                time.sleep(1)
+                return str(current_dir)
+        
         elif sel == 3:
-            path = input("Digite o caminho do diretório: ").strip()
+            cprint("💡 Dica: Use ~/ para diretório home ou ./ para diretório atual", "dim")
+            path = input("📂 Digite o caminho: ").strip()
             if not path:
                 continue
+            
+            # Convert to absolute for validation
             try:
-                full_path = str(Path(path).expanduser().resolve())
-                if Path(full_path).exists():
-                    return full_path
+                abs_path = from_portable_path(path)
+                if abs_path.exists() and abs_path.is_dir():
+                    return str(abs_path)
                 else:
-                    cprint(f"Diretório não existe: {full_path}", "yellow")
-                    create = input("Criar diretório? (s/n): ").strip().lower()
+                    cprint(f"⚠️  Diretório não existe: {path}", "yellow")
+                    create = input("📁 Criar diretório? (s/n): ").strip().lower()
                     if create in ['s', 'y', 'sim', 'yes']:
-                        Path(full_path).mkdir(parents=True, exist_ok=True)
-                        return full_path
+                        abs_path.mkdir(parents=True, exist_ok=True)
+                        return str(abs_path)
             except Exception as e:
-                cprint(f"Erro no caminho: {e}", "red")
+                cprint(f"❌ Erro no caminho: {e}", "red")
+                time.sleep(2)
+        
         elif sel == 4:
-            path = input("Digite o caminho do novo diretório: ").strip()
+            path = input("🆕 Digite o caminho do novo diretório: ").strip()
             if path:
                 try:
-                    full_path = str(Path(path).expanduser().resolve())
-                    Path(full_path).mkdir(parents=True, exist_ok=True)
-                    cprint(f"Diretório criado: {full_path}", "green")
-                    # Update default directory in config
-                    cfg["default_dir"] = full_path
-                    save_config()
+                    # Convert input to absolute path
+                    abs_path = from_portable_path(path)
+                    abs_path.mkdir(parents=True, exist_ok=True)
+                    portable_path = to_portable_path(str(abs_path))
+                    
+                    cprint(f"✅ Diretório criado: {portable_path}", "green")
+                    
+                    # Ask to set as default
+                    set_default = input("⭐ Definir como diretório padrão? (s/n): ").strip().lower()
+                    if set_default in ['s', 'y', 'sim', 'yes']:
+                        cfg["default_dir"] = portable_path
+                        save_config()
+                        cprint(f"✅ Diretório padrão atualizado", "green")
+                    
                     time.sleep(1)
-                    return full_path
+                    return str(abs_path)
                 except Exception as e:
-                    cprint(f"Erro criando diretório {path}: {e}", "red")
+                    cprint(f"❌ Erro criando diretório: {e}", "red")
                     time.sleep(2)
+        
         elif sel == 5 or sel is None:
             return None
 
-# ---------------- Cloudflared installer helper ----------------
+# ---------------- Installers ----------------
 def install_cloudflared_auto():
-    url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    """Install cloudflared - portable version"""
+    import platform
+    arch = platform.machine()
+    
+    if arch in ["x86_64", "amd64"]:
+        url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    elif arch in ["aarch64", "arm64"]:
+        url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+    elif "arm" in arch:
+        url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm"
+    else:
+        cprint(f"❌ Arquitetura não suportada: {arch}", "red")
+        cprint("📦 Instale manualmente: https://github.com/cloudflare/cloudflared", "yellow")
+        return False
+    
     tmp = Path("/tmp/cloudflared-autotunnel")
     
     try:
         import urllib.request
-        cprint("Baixando e instalando cloudflared...", "yellow")
+        cprint("📥 Baixando cloudflared...", "yellow")
         urllib.request.urlretrieve(url, str(tmp))
         tmp.chmod(0o755)
         
-        # Try system installation first
-        target = Path("/usr/local/bin/cloudflared")
-        try:
-            subprocess.run(["sudo", "mv", str(tmp), str(target)], check=True)
-            subprocess.run(["sudo", "chmod", "+x", str(target)], check=False)
-            cprint(f"cloudflared instalado em {target} (sistema)", "green")
-            cfg.setdefault("installed_tunnels", {})["cloudflared"] = str(target)
-            save_config()
-            return True
-        except Exception:
-            # Fallback to local bin
-            dst = LOCAL_BIN / "cloudflared"
-            shutil.copy(str(tmp), str(dst))
-            dst.chmod(0o755)
-            tmp.unlink()
-            cprint(f"cloudflared instalado localmente em {dst}", "green")
-            cfg.setdefault("installed_tunnels", {})["cloudflared"] = str(dst)
-            save_config()
-            return True
+        dst = LOCAL_BIN / "cloudflared"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(str(tmp), str(dst))
+        dst.chmod(0o755)
+        tmp.unlink(missing_ok=True)
+        
+        cprint(f"✅ cloudflared instalado em: {dst}", "green")
+        cfg.setdefault("installed_tunnels", {})["cloudflared"] = str(dst)
+        save_config()
+        return True
     except Exception as e:
-        cprint(f"Erro instalando cloudflared: {e}", "red")
+        cprint(f"❌ Erro instalando cloudflared: {e}", "red")
         return False
 
-# ---------------- Ngrok installer helper ----------------
 def install_ngrok_auto():
-    """Install ngrok and configure auth token"""
-    # Download ngrok
-    url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
+    """Install ngrok - portable version"""
+    import platform, tarfile, warnings
+    arch = platform.machine()
+    
+    if arch in ["x86_64", "amd64"]:
+        url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
+    elif arch in ["aarch64", "arm64"]:
+        url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-arm64.tgz"
+    elif "arm" in arch:
+        url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-arm.tgz"
+    else:
+        cprint(f"❌ Arquitetura não suportada: {arch}", "red")
+        cprint("📦 Instale manualmente: https://ngrok.com/download", "yellow")
+        return False
+    
     tmp_tar = Path("/tmp/ngrok.tgz")
     
     try:
         import urllib.request
-        import tarfile
-        
-        cprint("Baixando e instalando ngrok...", "yellow")
+        cprint("📥 Baixando ngrok...", "yellow")
         urllib.request.urlretrieve(url, str(tmp_tar))
         
-        # Extract ngrok
         with tarfile.open(tmp_tar, 'r:gz') as tar:
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
             tar.extract('ngrok', path="/tmp")
         
         tmp_ngrok = Path("/tmp/ngrok")
+        if not tmp_ngrok.exists():
+            cprint("❌ Erro extraindo ngrok", "red")
+            return False
         
-        # Move to local bin
         dst = LOCAL_BIN / "ngrok"
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(str(tmp_ngrok), str(dst))
         dst.chmod(0o755)
         
-        # Clean up
-        tmp_tar.unlink()
-        tmp_ngrok.unlink()
+        tmp_tar.unlink(missing_ok=True)
+        tmp_ngrok.unlink(missing_ok=True)
         
-        # Configure auth token if not set
+        # Configure token if needed
         if not cfg.get("ngrok_auth_token"):
-            cprint("Ngrok requer token de autenticação", "yellow")
-            cprint("Obtenha um token em: https://dashboard.ngrok.com/get-started/your-authtoken", "cyan")
-            token = input("Digite seu token do ngrok: ").strip()
+            cprint("\n🔑 Ngrok requer token (obtenha em: https://dashboard.ngrok.com)", "yellow")
+            token = input("🔑 Token: ").strip()
             if token:
                 cfg["ngrok_auth_token"] = token
                 save_config()
-                # Configure ngrok with token
-                subprocess.run([str(dst), "config", "add-authtoken", token], 
+                subprocess.run([str(dst), "config", "add-authtoken", token],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                cprint("Token do ngrok salvo", "green")
         
         cfg.setdefault("installed_tunnels", {})["ngrok"] = str(dst)
         save_config()
-        cprint(f"ngrok instalado em {dst}", "green")
+        cprint(f"✅ ngrok instalado em: {dst}", "green")
         return True
         
     except Exception as e:
-        cprint(f"Erro instalando ngrok: {e}", "red")
+        cprint(f"❌ Erro instalando ngrok: {e}", "red")
         return False
 
-# ---------------- Save config helper ----------------
+# ---------------- Save config ----------------
 def save_config():
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
-# ---------------- Tunnel orchestration ----------------
+# ---------------- Tunnel functions ----------------
 def start_tunnel_flow(only_tunnel=False):
     load_plugins()
     if not PLUGINS:
-        cprint("Nenhum plugin encontrado", "red")
-        input("Pressione Enter para continuar...")
+        cprint("❌ Nenhum plugin encontrado", "red")
+        input("⏎ Pressione Enter...")
         return
     
-    # Show plugin options
     opts = [f"{name}" for _, (name,_) in PLUGINS.items()]
-    sel = numeric_choice("Escolha um plugin (número):", opts)
+    sel = numeric_choice("🔌 Escolha um plugin:", opts)
     
     if sel is None:
-        cprint("Escolha inválida", "red")
-        input("Pressione Enter para continuar...")
+        cprint("❌ Escolha inválida", "red")
+        input("⏎ Pressione Enter...")
         return
     
     name, plugin = PLUGINS[sel]
     
-    # Check if plugin is installed
     if not plugin.installed():
-        cprint(f"Plugin {name} não está instalado", "yellow")
-        install_now = input("Instalar agora? (s/n): ").strip().lower()
+        cprint(f"⚠️  {name} não instalado", "yellow")
+        install_now = input("📦 Instalar agora? (s/n): ").strip().lower()
         
         if install_now in ['s', 'y', 'sim', 'yes']:
             if name == "cloudflared":
@@ -493,162 +626,141 @@ def start_tunnel_flow(only_tunnel=False):
                 ok = plugin.install()
             
             if not ok:
-                cprint("Instalação falhou", "red")
-                input("Pressione Enter para continuar...")
+                cprint("❌ Instalação falhou", "red")
+                input("⏎ Pressione Enter...")
                 return
         else:
-            cprint("Instalação cancelada", "yellow")
-            input("Pressione Enter para continuar...")
+            input("⏎ Pressione Enter...")
             return
     
-    # Get port
     port = cfg.get("default_port", 1337)
     if not only_tunnel:
-        p = input(f"Porta HTTP (padrão {port}): ").strip()
+        p = input(f"🔢 Porta (padrão {port}): ").strip()
         if p:
             try:
                 port = int(p)
             except:
-                cprint("Porta inválida", "red")
+                cprint("❌ Porta inválida", "red")
                 port = cfg.get("default_port", 1337)
         
-        # Start HTTP server
         d = choose_dir()
         if not d:
-            cprint("Abortado", "red")
-            input("Pressione Enter para continuar...")
+            cprint("❌ Abortado", "red")
+            input("⏎ Pressione Enter...")
             return
         
         started = http_server.start(port, d)
         if started:
-            cprint(f"Servidor iniciado na porta {port}", "green")
+            cprint(f"✅ Servidor iniciado na porta {port}", "green")
         else:
-            cprint("Servidor já está rodando", "yellow")
+            cprint("⚠️  Servidor já está rodando", "yellow")
     else:
-        # Tunnel only mode - still need port
-        p = input(f"Porta local para o túnel (padrão {port}): ").strip()
+        p = input(f"🔢 Porta local (padrão {port}): ").strip()
         if p:
             try:
                 port = int(p)
             except:
-                cprint("Porta inválida", "red")
+                cprint("❌ Porta inválida", "red")
                 port = cfg.get("default_port", 1337)
     
-    # Start tunnel
-    cprint(f"Iniciando túnel ({name})...", "cyan")
+    cprint(f"🚇 Iniciando {name}...", "cyan")
     
-    # For ngrok, check if auth token is configured
     if name == "ngrok" and not cfg.get("ngrok_auth_token"):
-        cprint("Token do ngrok não configurado", "yellow")
-        token = input("Digite seu token do ngrok: ").strip()
+        cprint("⚠️  Token do ngrok não configurado", "yellow")
+        token = input("🔑 Token: ").strip()
         if token:
             cfg["ngrok_auth_token"] = token
             save_config()
-            # Configure ngrok
             ngrok_path = cfg.get("installed_tunnels", {}).get("ngrok", "ngrok")
             subprocess.run([ngrok_path, "config", "add-authtoken", token],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     plugin.start(port)
     
-    # Wait for URL
-    cprint("Aguardando URL do túnel...", "cyan")
+    cprint("⏳ Aguardando URL...", "cyan")
     for i in range(40):
         url = getattr(plugin, "url", None)
         if url:
-            cprint(f"Túnel ativo: {url}", "bold green")
+            cprint(f"✅ Túnel ativo: [bold green]{url}[/bold green]", "white")
             (DATA_DIR / "last_tunnel.url").write_text(url)
             
-            # Copy URL to clipboard if possible
             try:
                 import pyperclip
                 pyperclip.copy(url)
-                cprint("URL copiada para a área de transferência", "green")
+                cprint("📋 URL copiada", "green")
             except:
                 pass
             
-            input("Pressione Enter para continuar...")
+            input("⏎ Pressione Enter...")
             return
         time.sleep(0.5)
     
-    cprint("Túnel iniciado mas URL não encontrada (ver logs).", "yellow")
-    cprint("Verifique os logs para mais informações", "cyan")
-    input("Pressione Enter para continuar...")
+    cprint("⚠️  Túnel iniciado sem URL", "yellow")
+    input("⏎ Pressione Enter...")
 
 def stop_tunnel_flow():
     load_plugins()
     if not PLUGINS:
-        cprint("Nenhum plugin encontrado", "red")
-        input("Pressione Enter para continuar...")
+        cprint("❌ Nenhum plugin", "red")
+        input("⏎ Pressione Enter...")
         return
     
-    # Get running tunnels
-    running_tunnels = []
+    running = []
     for idx, (name, plugin) in PLUGINS.items():
         if hasattr(plugin, 'proc') and plugin.proc:
-            running_tunnels.append((idx, name, plugin))
+            running.append((idx, name, plugin))
     
-    if not running_tunnels:
-        cprint("Nenhum túnel em execução", "yellow")
-        input("Pressione Enter para continuar...")
+    if not running:
+        cprint("ℹ️  Nenhum túnel ativo", "yellow")
+        input("⏎ Pressione Enter...")
         return
     
-    # If only one tunnel running, stop it directly
-    if len(running_tunnels) == 1:
-        idx, name, plugin = running_tunnels[0]
+    if len(running) == 1:
+        idx, name, plugin = running[0]
         ok = plugin.stop()
-        cprint(f"Túnel {name}: {'sucesso' if ok else 'falhou'}", 
-               "green" if ok else "red")
-        input("Pressione Enter para continuar...")
+        cprint(f"{'✅' if ok else '❌'} {name} parado", "green" if ok else "red")
+        input("⏎ Pressione Enter...")
         return
     
-    # Multiple tunnels - let user choose
-    opts = [f"{name}" for _, name, _ in running_tunnels]
-    sel = numeric_choice("Escolha o túnel para parar:", opts)
+    opts = [f"{name}" for _, name, _ in running]
+    sel = numeric_choice("🛑 Escolha túnel para parar:", opts)
     
     if sel is None:
-        cprint("Escolha inválida", "red")
-        input("Pressione Enter para continuar...")
+        cprint("❌ Escolha inválida", "red")
+        input("⏎ Pressione Enter...")
         return
     
-    # Find selected tunnel
-    for i, (_, name, plugin) in enumerate(running_tunnels, 1):
+    for i, (_, name, plugin) in enumerate(running, 1):
         if i == sel:
             ok = plugin.stop()
-            cprint(f"Túnel {name}: {'sucesso' if ok else 'falhou'}",
-                   "green" if ok else "red")
-            input("Pressione Enter para continuar...")
+            cprint(f"{'✅' if ok else '❌'} {name} parado", "green" if ok else "red")
+            input("⏎ Pressione Enter...")
             return
 
 # ---------------- Log viewer ----------------
 def view_logs():
-    """View logs from different sources"""
     while True:
         print_header()
-        cprint("[bold]Visualizador de Logs[/bold]", "cyan")
+        cprint("[bold]📄 Logs[/bold]", "cyan")
         
         logs_available = []
-        
-        # Check HTTP server logs
         if http_server.log_path.exists():
-            logs_available.append(("HTTP Server", http_server.log_path))
+            logs_available.append(("🌐 HTTP Server", http_server.log_path))
         
-        # Check tunnel logs
         load_plugins()
         for idx, (name, plugin) in PLUGINS.items():
             if hasattr(plugin, 'log_path') and plugin.log_path and Path(plugin.log_path).exists():
-                logs_available.append((f"Tunnel {name}", plugin.log_path))
+                logs_available.append((f"🚇 {name}", plugin.log_path))
         
         if not logs_available:
-            cprint("Nenhum log disponível", "yellow")
-            input("Pressione Enter para continuar...")
+            cprint("ℹ️  Nenhum log", "yellow")
+            input("⏎ Pressione Enter...")
             return
         
-        # Build menu options
         opts = [f"{name}" for name, _ in logs_available]
-        opts.append("Voltar")
+        opts.append("⬅️  Voltar")
         
-        sel = numeric_choice("Escolha o log para visualizar:", opts)
+        sel = numeric_choice("📂 Escolha log:", opts)
         
         if sel is None or sel > len(logs_available):
             return
@@ -658,30 +770,25 @@ def view_logs():
             show_log_file(name, log_path)
 
 def show_log_file(name, log_path):
-    """Display log file content"""
     while True:
         print_header()
-        cprint(f"[bold]Log: {name}[/bold]", "cyan")
-        cprint(f"[dim]Arquivo: {log_path}[/dim]", "white")
+        cprint(f"[bold]📄 {name}[/bold]", "cyan")
         
         try:
             with open(log_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
             if not lines:
-                cprint("Log vazio", "yellow")
+                cprint("📭 Vazio", "yellow")
             else:
-                # Show last 50 lines
-                start = max(0, len(lines) - 50)
+                start = max(0, len(lines) - 30)
                 for line in lines[start:]:
-                    # Color code different types of log entries
                     line = line.rstrip()
                     if "ERROR" in line or "error" in line.lower():
-                        cprint(line, "red")
+                        cprint(f"❌ {line}", "red")
                     elif "WARN" in line or "warning" in line.lower():
-                        cprint(line, "yellow")
+                        cprint(f"⚠️  {line}", "yellow")
                     elif "https://" in line:
-                        # Highlight URLs
                         parts = line.split("https://")
                         if len(parts) > 1:
                             cprint(parts[0], "white", end="")
@@ -689,59 +796,49 @@ def show_log_file(name, log_path):
                         else:
                             cprint(line, "white")
                     else:
-                        cprint(line, "white")
+                        cprint(f"📝 {line}", "white")
             
             print("\n" + "="*60)
-            opts = [
-                "Atualizar",
-                "Limpar log",
-                "Monitorar em tempo real",
-                "Voltar"
-            ]
+            opts = ["🔄 Atualizar", "🧹 Limpar", "👀 Monitorar", "⬅️  Voltar"]
             
-            sel = numeric_choice("Ação:", opts)
+            sel = numeric_choice("⚡ Ação:", opts)
             
             if sel == 1:
-                continue  # Refresh
+                continue
             elif sel == 2:
-                # Clear log
-                confirm = input("Tem certeza que deseja limpar o log? (s/n): ").strip().lower()
+                confirm = input("⚠️  Limpar log? (s/n): ").strip().lower()
                 if confirm in ['s', 'y', 'sim', 'yes']:
                     with open(log_path, 'w', encoding='utf-8') as f:
-                        f.write(f"[{datetime.datetime.now().isoformat()}] Log cleared\n")
-                    cprint("Log limpo", "green")
+                        f.write(f"[{datetime.datetime.now().isoformat()}] Log limpo\n")
+                    cprint("✅ Limpo", "green")
                     time.sleep(1)
             elif sel == 3:
-                # Tail mode (follow log)
                 tail_log(name, log_path)
             else:
                 break
                 
         except Exception as e:
-            cprint(f"Erro lendo log: {e}", "red")
-            input("Pressione Enter para continuar...")
+            cprint(f"❌ Erro: {e}", "red")
+            input("⏎ Pressione Enter...")
             break
 
 def tail_log(name, log_path):
-    """Follow log file in real-time"""
     print_header()
-    cprint(f"[bold]Monitorando: {name}[/bold]", "cyan")
-    cprint(f"[dim]Pressione Ctrl+C para voltar[/dim]", "white")
+    cprint(f"[bold]👀 {name}[/bold]", "cyan")
+    cprint("[dim]Ctrl+C para voltar[/dim]", "white")
     print("-" * 60)
     
     try:
         with open(log_path, 'r', encoding='utf-8') as f:
-            # Go to end of file
             f.seek(0, 2)
-            
             while True:
                 line = f.readline()
                 if line:
                     line = line.rstrip()
                     if "ERROR" in line or "error" in line.lower():
-                        cprint(line, "red")
+                        cprint(f"❌ {line}", "red")
                     elif "WARN" in line or "warning" in line.lower():
-                        cprint(line, "yellow")
+                        cprint(f"⚠️  {line}", "yellow")
                     elif "https://" in line:
                         parts = line.split("https://")
                         if len(parts) > 1:
@@ -750,55 +847,48 @@ def tail_log(name, log_path):
                         else:
                             cprint(line, "white")
                     else:
-                        cprint(line, "white")
+                        cprint(f"📝 {line}", "white")
                 else:
                     time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        cprint(f"Erro: {e}", "red")
+        cprint(f"❌ Erro: {e}", "red")
 
-# ---------------- Status display ----------------
+# ---------------- Status ----------------
 def show_status():
-    """Display current status of servers and tunnels"""
     print_header()
     
-    # HTTP Server status
     if http_server.httpd:
-        cprint(f"[green]●[/green] HTTP Server: porta {http_server.port}", "bold")
-        cprint(f"   Diretório: {http_server.directory}", "dim")
+        cprint(f"✅ HTTP Server: porta {http_server.port}", "bold")
+        cprint(f"   Diretório: {to_portable_path(http_server.directory)}", "dim")
         
-        # Show last few requests
-        logs = http_server.get_logs(5)
+        logs = http_server.get_logs(3)
         if logs:
             cprint("\n   Últimas requisições:", "cyan")
-            for log in logs[-5:]:
+            for log in logs[-3:]:
                 cprint(f"   {log.strip()}", "white")
     else:
-        cprint(f"[red]●[/red] HTTP Server: parado", "bold")
+        cprint(f"❌ HTTP Server: parado", "bold")
     
     print()
     
-    # Tunnel status
     load_plugins()
-    running_tunnels = 0
+    running = 0
     
     for idx, (name, plugin) in PLUGINS.items():
         installed = plugin.installed()
         is_running = hasattr(plugin, 'proc') and plugin.proc and plugin.proc.poll() is None
         
         if is_running:
-            running_tunnels += 1
-            status_icon = "[green]●[/green]"
-            status_text = "executando"
+            running += 1
+            status = "✅"
         elif installed:
-            status_icon = "[yellow]●[/yellow]"
-            status_text = "instalado"
+            status = "⚠️ "
         else:
-            status_icon = "[red]●[/red]"
-            status_text = "não instalado"
+            status = "❌"
         
-        cprint(f"{status_icon} {name}: {status_text}", "bold")
+        cprint(f"{status} {name}: {'executando' if is_running else 'instalado' if installed else 'não instalado'}", "bold")
         
         if is_running:
             url = getattr(plugin, 'url', None)
@@ -809,81 +899,74 @@ def show_status():
                 cprint(f"   PID: {pid}", "dim")
     
     print("\n" + "="*60)
-    cprint(f"Resumo: {running_tunnels} túnel(s) ativo(s)", 
-           "green" if running_tunnels > 0 else "yellow")
-    input("Pressione Enter para continuar...")
+    cprint(f"📊 Resumo: {running} túnel(s) ativo(s)", "green" if running > 0 else "yellow")
+    input("⏎ Pressione Enter...")
 
 # ---------------- Settings ----------------
 def show_settings():
-    """Configuration settings"""
     global I18N, LANG
     
     while True:
         print_header()
-        cprint("[bold]Configurações[/bold]", "cyan")
+        cprint("[bold]⚙️  Configurações[/bold]", "cyan")
         
-        cprint(f"\nIdioma atual: {LANG}", "white")
-        cprint(f"Porta padrão: {cfg.get('default_port', 1337)}", "white")
-        cprint(f"Diretório padrão: {cfg.get('default_dir', '')}", "white")
+        cprint(f"\n🌐 Idioma: {LANG}", "white")
+        cprint(f"🔢 Porta padrão: {cfg.get('default_port', 1337)}", "white")
+        cprint(f"📁 Diretório padrão: {cfg.get('default_dir', '~')}", "white")
         
         if cfg.get('ngrok_auth_token'):
-            cprint(f"Ngrok Token: {'*' * 20}", "white")
+            cprint(f"🔑 Ngrok Token: {'*' * 20}", "white")
         else:
-            cprint("Ngrok Token: Não configurado", "yellow")
+            cprint("🔑 Ngrok Token: Não configurado", "yellow")
         
         print()
         opts = [
-            "Alterar idioma",
-            "Alterar porta padrão",
-            "Alterar diretório padrão",
-            "Configurar token do ngrok",
-            "Voltar"
+            "🌐 Alterar idioma",
+            "🔢 Alterar porta",
+            "📁 Alterar diretório",
+            "🔑 Configurar token ngrok",
+            "⬅️  Voltar"
         ]
         
-        sel = numeric_choice("Escolha configuração:", opts)
+        sel = numeric_choice("⚙️  Escolha:", opts)
         
         if sel == 1:
-            # Change language
             lang_opts = ["Português (pt)", "English (en)"]
-            lsel = numeric_choice("Escolha o idioma (número):", lang_opts)
+            lsel = numeric_choice("🌐 Idioma:", lang_opts)
             if lsel == 1:
                 cfg["language"] = "pt"
             elif lsel == 2:
                 cfg["language"] = "en"
             save_config()
-            # Update global variables
             LANG = cfg["language"]
             I18N = load_lang(LANG)
-            cprint("Idioma salvo", "green")
+            cprint("✅ Idioma salvo", "green")
             time.sleep(1)
-            return  # Need to reload the interface
+            return
         elif sel == 2:
-            # Change default port
-            new_port = input("Nova porta padrão: ").strip()
+            new_port = input("🔢 Nova porta: ").strip()
             if new_port:
                 try:
                     cfg["default_port"] = int(new_port)
                     save_config()
-                    cprint("Porta salva", "green")
+                    cprint("✅ Porta salva", "green")
                     time.sleep(1)
                 except:
-                    cprint("Porta inválida", "red")
+                    cprint("❌ Porta inválida", "red")
                     time.sleep(2)
         elif sel == 3:
-            # Change default directory
             new_dir = choose_dir()
             if new_dir:
-                cfg["default_dir"] = new_dir
+                cfg["default_dir"] = to_portable_path(new_dir)
                 save_config()
-                cprint("Diretório salvo", "green")
+                cprint("✅ Diretório salvo", "green")
                 time.sleep(1)
         elif sel == 4:
-            # Configure Ngrok token
-            token = input("Digite seu token do ngrok: ").strip()
+            token = input("🔑 Token ngrok: ").strip()
             if token:
                 cfg["ngrok_auth_token"] = token
                 save_config()
-                cprint("Token do ngrok salvo", "green")
+                cprint("✅ Token salvo", "green")
                 time.sleep(1)
         else:
             break
@@ -896,81 +979,71 @@ def main():
         print_header()
         
         menu_opts = [
-            "Iniciar servidor HTTP",
-            "Iniciar túnel com servidor",
-            "Iniciar túnel sem servidor",
-            "Parar servidor HTTP",
-            "Parar túnel",
-            "Status atual",
-            "Visualizar logs",
-            "Configurações",
-            "Sair"
+            "🌐 Iniciar servidor HTTP",
+            "🚇 Iniciar túnel com servidor",
+            "🔌 Iniciar túnel apenas",
+            "🛑 Parar servidor HTTP",
+            "✋ Parar túnel",
+            "📊 Status",
+            "📄 Logs",
+            "⚙️  Configurações",
+            "🚪 Sair"
         ]
         
-        sel = numeric_choice("Escolha uma opção (número):", menu_opts)
+        sel = numeric_choice("📋 Escolha:", menu_opts)
         
         if sel == 1:
-            # Start HTTP server
             port = cfg.get("default_port", 1337)
-            p = input(f"Porta HTTP (padrão {port}): ").strip()
+            p = input(f"🔢 Porta (padrão {port}): ").strip()
             if p:
                 try:
                     port = int(p)
                 except:
-                    cprint("Porta inválida", "red")
+                    cprint("❌ Porta inválida", "red")
                     continue
             
             d = choose_dir()
             if not d:
-                cprint("Abortado", "red")
+                cprint("❌ Abortado", "red")
                 time.sleep(1)
                 continue
             
             ok = http_server.start(port, d)
-            cprint(f"Servidor iniciado na porta {port}" if ok else "Servidor já está rodando", "green")
-            input("Pressione Enter para continuar...")
+            cprint(f"{'✅' if ok else '⚠️ '} Servidor {'iniciado' if ok else 'já rodando'}", "green" if ok else "yellow")
+            input("⏎ Pressione Enter...")
             
         elif sel == 2:
-            # Start tunnel with server
             start_tunnel_flow(only_tunnel=False)
             
         elif sel == 3:
-            # Start tunnel only
             start_tunnel_flow(only_tunnel=True)
             
         elif sel == 4:
-            # Stop HTTP server
             if http_server.stop():
-                cprint("Servidor parado", "green")
+                cprint("✅ Servidor parado", "green")
             else:
-                cprint("Servidor não está em execução", "yellow")
-            input("Pressione Enter para continuar...")
+                cprint("⚠️  Servidor não estava rodando", "yellow")
+            input("⏎ Pressione Enter...")
             
         elif sel == 5:
-            # Stop tunnel
             stop_tunnel_flow()
             
         elif sel == 6:
-            # Status
             show_status()
             
         elif sel == 7:
-            # View logs
             view_logs()
             
         elif sel == 8:
-            # Settings
             show_settings()
             
         elif sel == 9:
-            # Exit
-            cprint("Saindo...", "cyan")
+            cprint("👋 Saindo...", "cyan")
             try:
                 http_server.stop()
             except:
                 pass
             
-            # Stop all running tunnels
             load_plugins()
             for _, (_, plugin) in PLUGINS.items():
                 try:
@@ -981,15 +1054,13 @@ def main():
             
             break
         else:
-            cprint("Escolha inválida", "red")
+            cprint("❌ Opção inválida", "red")
             time.sleep(1)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        cprint("\nInterrompido pelo usuário", "yellow")
+        cprint("\n👋 Interrompido", "yellow")
     except Exception as e:
-        cprint(f"\nErro fatal: {e}", "red")
-        import traceback
-        traceback.print_exc()
+        cprint(f"\n💀 Erro: {e}", "red")
