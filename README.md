@@ -1,5 +1,9 @@
 # AutoTunnel
 
+<p align="center">
+  <img src="assets/pic.png" alt="AutoTunnel main menu" width="800">
+</p>
+
 AutoTunnel is an **interactive CLI utility** written in Python to quickly spin up a **local HTTP server** and expose it to the internet using **secure tunnels** such as **Cloudflared** and **Ngrok**. It is designed for speed and simplicity, featuring **numeric menus**, a **colored UI (Rich)**, **automatic dependency installation**, and a clean operational flow.
 
 ---
@@ -165,4 +169,3 @@ MIT License
 AutoTunnel was built for fast, minimal, and controlled tunnel-based workflows.
 
 Contributions and new tunnel plugins are welcome.
-
