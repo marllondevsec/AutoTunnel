@@ -3,13 +3,14 @@
 AutoTunnel - Minimal, numeric menus, colored (rich), auto-install cloudflared/ngrok.
 Completely portable - no fixed hostnames or absolute paths.
 """
-import os, sys, json, shutil, subprocess, threading, time, re, importlib.util
+import os, sys, json, shutil, subprocess, threading, time, re, importlib.util, socket
 from pathlib import Path
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import datetime
 
 # ---------------- ASCII Arts Separadas ----------------
-ASCII_ART_1 = """._____. ._____.
+ASCII_ART_1 = """
+._____. ._____.
 | ._. | | ._. |
 | !_| |_|_|_! |
 !___| |_______!
@@ -18,7 +19,8 @@ ASCII_ART_1 = """._____. ._____.
 | !_! | | !_! |
 !_____! !_____!"""
 
-ASCII_ART_2 = """  /$$$$$$              /$$            /$$$$$$$$                                      /$$
+ASCII_ART_2 = """ 
+  /$$$$$$              /$$            /$$$$$$$$                                      /$$
  /$$__  $$            | $$           |__  $$__/                                     | $$
 | $$  \ $$ /$$   /$$ /$$$$$$    /$$$$$$ | $$ /$$   /$$ /$$$$$$$  /$$$$$$$   /$$$$$$ | $$
 | $$$$$$$$| $$  | $$|_  $$_/   /$$__  $$| $$| $$  | $$| $$__  $$| $$__  $$ /$$__  $$| $$
@@ -106,6 +108,88 @@ def from_portable_path(portable_path_str):
         # Fallback to current directory
         return Path.cwd()
 
+def get_local_ip():
+    """
+    Get the local IP address of the machine.
+    Returns the network interface IP (not localhost).
+    """
+    try:
+        # Create a socket to connect to an external server (doesn't send data)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        # Try to connect to any IP (doesn't need to be reachable)
+        s.connect(('10.254.254.254', 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        try:
+            # Fallback: get hostname and resolve to IP
+            hostname = socket.gethostname()
+            ip = socket.gethostbyname(hostname)
+            if ip.startswith('127.'):
+                return None
+            return ip
+        except:
+            return None
+
+def show_server_urls(port):
+    """
+    Show URLs to access the HTTP server.
+    """
+    local_ip = get_local_ip()
+    
+    if console:
+        from rich.table import Table
+        from rich.panel import Panel
+        
+        # Create table
+        table = Table(box=None, show_header=False, padding=(0, 2))
+        table.add_column("Type", style="cyan", no_wrap=True)
+        table.add_column("URL", style="green")
+        
+        if local_ip:
+            local_url = f"http://{local_ip}:{port}"
+            table.add_row(f"🌐 {tr('local_network')}", local_url)
+        
+        loopback_url = f"http://127.0.0.1:{port}"
+        table.add_row("🔄 Loopback", loopback_url)
+        
+        console.print(table)
+        
+        if local_ip:
+            console.print(f"\n[yellow]💡 {tr('share_local_url')}[/yellow]")
+        
+        # Copy to clipboard
+        if local_ip:
+            try:
+                import pyperclip
+                pyperclip.copy(local_url)
+                console.print(f"[green]📋 {tr('copied_to_clipboard')}[/green]")
+            except:
+                pass
+    
+    else:
+        # Fallback without Rich
+        print("\n" + "="*60)
+        print(tr("server_urls"))
+        if local_ip:
+            local_url = f"http://{local_ip}:{port}"
+            print(f"🌐 {tr('local_network')}: {local_url}")
+        print(f"🔄 Loopback: http://127.0.0.1:{port}")
+        print("="*60)
+        if local_ip:
+            print(f"💡 {tr('share_local_url')}")
+    
+    # Save URL for future reference
+    if local_ip:
+        url_to_save = f"http://{local_ip}:{port}"
+    else:
+        url_to_save = f"http://127.0.0.1:{port}"
+    
+    (DATA_DIR / "last_server.url").write_text(url_to_save)
+    return url_to_save
+
 # Define all paths using portable functions
 CONFIG_DIR = get_user_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -127,6 +211,26 @@ DEFAULT_CONFIG = {
     "default_dir": "",  # Empty by default - will be set with portable path
     "installed_tunnels": {},
     "ngrok_auth_token": ""
+}
+
+# Fallback English translations for new keys
+FALLBACK_EN = {
+    "server_local_url": "Local server URL: {1}",
+    "server_loopback_url": "Loopback URL: {1}",
+    "local_network": "Local Network",
+    "copied_to_clipboard": "Copied to clipboard!",
+    "share_local_url": "Share this URL with other devices on the same network",
+    "ip_not_detected": "Could not detect local network IP. Only accessible from this machine.",
+    "saved_urls": "Saved URLs",
+    "last_server_url": "Last Server",
+    "last_tunnel_url": "Last Tunnel",
+    "copy_url": "Copy",
+    "url_copied_success": "URL copied to clipboard!",
+    "no_saved_urls": "No saved URLs found",
+    "server_urls": "Server URLs:",
+    "view_saved_urls": "View Saved URLs",
+    "summary": "Summary: {1} active tunnel(s)",
+    "menu.show_saved_urls": "Show saved URLs"
 }
 
 # ---------------- Helpful: ensure rich ----------------
@@ -202,7 +306,10 @@ def load_lang(lang):
 
 I18N = load_lang(LANG)
 def tr(key, *args):
-    s = I18N.get(key, key)
+    s = I18N.get(key)
+    if s is None:
+        # If not found, try English fallback
+        s = FALLBACK_EN.get(key, key)
     for i,a in enumerate(args, start=1):
         s = s.replace("{" + str(i) + "}", str(a))
     return s
@@ -709,6 +816,8 @@ def start_tunnel_flow(only_tunnel=False):
         started = http_server.start(port, d)
         if started:
             cprint(tr("server_started", port), "green")
+            # Show local server URLs even when starting tunnel
+            show_server_urls(port)
         else:
             cprint(tr("server_already"), "yellow")
     else:
@@ -796,6 +905,76 @@ def stop_tunnel_flow():
             cprint(tr("stop_result", name, "stopped" if ok else "error"), "green" if ok else "red")
             input(tr("press_enter"))
             return
+
+# ---------------- URL Viewer ----------------
+def show_saved_urls():
+    """Show saved URLs from previous sessions"""
+    while True:
+        print_header()
+        cprint(f"[bold]🔗 {tr('saved_urls')}[/bold]", "cyan")
+        
+        urls = []
+        
+        # Check for server URL
+        server_url_file = DATA_DIR / "last_server.url"
+        if server_url_file.exists():
+            server_url = server_url_file.read_text(encoding="utf-8").strip()
+            if server_url:
+                urls.append((f"🌐 {tr('last_server_url')}", server_url))
+        
+        # Check for tunnel URLs
+        tunnel_url_file = DATA_DIR / "last_tunnel.url"
+        if tunnel_url_file.exists():
+            tunnel_url = tunnel_url_file.read_text(encoding="utf-8").strip()
+            if tunnel_url:
+                urls.append((f"🚇 {tr('last_tunnel_url')}", tunnel_url))
+        
+        if not urls:
+            cprint(tr("no_saved_urls"), "yellow")
+            input(tr("press_enter"))
+            return
+        
+        # Display URLs
+        if console:
+            table = Table(box=None, show_header=False, padding=(0, 2))
+            table.add_column("Type", style="cyan", no_wrap=True)
+            table.add_column("URL", style="green")
+            
+            for name, url in urls:
+                table.add_row(name, url)
+            
+            console.print(table)
+            
+            # Add copy options
+            print("\n" + "="*60)
+            opts = []
+            for i, (name, url) in enumerate(urls, 1):
+                opts.append(f"📋 {tr('copy_url')} {name}")
+            opts.append(f"⬅️ {tr('back')}")
+            
+            sel = numeric_choice(tr("prompt.choose_url_to_copy"), opts)
+            
+            if sel is None or sel > len(urls):
+                break
+            
+            if sel <= len(urls):
+                name, url = urls[sel - 1]
+                try:
+                    import pyperclip
+                    pyperclip.copy(url)
+                    cprint(f"✅ {tr('url_copied_success')}", "green")
+                    time.sleep(1)
+                except:
+                    cprint(f"⚠️ {tr('url_copied')}", "yellow")
+                    time.sleep(2)
+        else:
+            # Fallback without Rich
+            print("\n" + "="*60)
+            for name, url in urls:
+                print(f"{name}: {url}")
+            print("="*60)
+            input(tr("press_enter"))
+            break
 
 # ---------------- Log viewer ----------------
 def view_logs():
@@ -928,6 +1107,12 @@ def show_status():
         cprint(f"✅ {tr('menu.start_server')}: port {http_server.port}", "bold")
         cprint(f"   {tr('current_dir', to_portable_path(http_server.directory))}", "dim")
         
+        # Show local URLs in status
+        local_ip = get_local_ip()
+        if local_ip:
+            cprint(f"   🌐 {tr('local_network')}: http://{local_ip}:{http_server.port}", "green")
+        cprint(f"   🔄 Loopback: http://127.0.0.1:{http_server.port}", "green")
+        
         logs = http_server.get_logs(3)
         if logs:
             cprint("\n   Last requests:", "cyan")
@@ -964,7 +1149,25 @@ def show_status():
                 cprint(f"   PID: {pid}", "dim")
     
     print("\n" + "="*60)
-    cprint(f"📊 Summary: {running} active tunnel(s)", "green" if running > 0 else "yellow")
+    cprint(f"📊 {tr('summary', running)}", "green" if running > 0 else "yellow")
+    
+    # Show saved URLs
+    print("\n" + "="*60)
+    cprint(f"🔗 {tr('saved_urls')}:", "cyan")
+    
+    server_url_file = DATA_DIR / "last_server.url"
+    if server_url_file.exists():
+        server_url = server_url_file.read_text(encoding="utf-8").strip()
+        if server_url:
+            cprint(f"🌐 {tr('last_server_url')}: {server_url}", "white")
+    
+    tunnel_url_file = DATA_DIR / "last_tunnel.url"
+    if tunnel_url_file.exists():
+        tunnel_url = tunnel_url_file.read_text(encoding="utf-8").strip()
+        if tunnel_url:
+            cprint(f"🚇 {tr('last_tunnel_url')}: {tunnel_url}", "white")
+    
+    print("="*60)
     input(tr("press_enter"))
 
 # ---------------- Settings ----------------
@@ -1060,6 +1263,7 @@ def main():
             f"✋ {tr('menu.stop_tunnel')}",
             f"📊 {tr('menu.status')}",
             f"📄 {tr('menu.view_logs')}",
+            f"🔗 {tr('menu.show_saved_urls')}",  # Usando a tradução
             f"⚙️ {tr('menu.settings')}",
             f"🚪 {tr('menu.exit')}"
         ]
@@ -1085,6 +1289,7 @@ def main():
             ok = http_server.start(port, d)
             if ok:
                 cprint(tr("server_started", port), "green")
+                show_server_urls(port)  # Show local server URLs
             else:
                 cprint(tr("server_already"), "yellow")
             input(tr("press_enter"))
@@ -1111,12 +1316,15 @@ def main():
         elif sel == 7:
             view_logs()
             
-        elif sel == 8:
+        elif sel == 8:  # Show saved URLs
+            show_saved_urls()
+            
+        elif sel == 9:
             refresh = show_settings()
             if refresh:
                 continue  # Refresh the interface with new language
             
-        elif sel == 9:
+        elif sel == 10:
             cprint("👋 Exiting...", "cyan")
             try:
                 http_server.stop()
