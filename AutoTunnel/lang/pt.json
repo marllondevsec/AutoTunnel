@@ -7,6 +7,7 @@
   "menu.status": "Status atual",
   "menu.view_logs": "Visualizar logs",
   "menu.settings": "Configurações",
+  "menu.show_saved_urls": "Ver URLs Salvos",
   "menu.exit": "Sair",
   
   "prompt.choose_menu_numeric": "Escolha uma opção (número):",
@@ -26,6 +27,7 @@
   "prompt.choose_setting": "Escolha configuração:",
   "prompt.new_default_port": "Nova porta padrão:",
   "prompt.create_dir": "Criar diretório? (s/n):",
+  "prompt.choose_url_to_copy": "Escolha URL para copiar:",
 
   "dir_option_current": "Diretório atual (PWD)",
   "dir_option_default": "Diretório padrão",
@@ -87,5 +89,20 @@
   "settings_change_lang": "Alterar idioma",
   "settings_change_port": "Alterar porta padrão",
   "settings_change_dir": "Alterar diretório padrão",
-  "settings_ngrok_token": "Configurar token do ngrok"
+  "settings_ngrok_token": "Configurar token do ngrok",
+
+  "saved_urls": "URLs Salvos",
+  "last_server_url": "Último Servidor",
+  "last_tunnel_url": "Último Túnel",
+  "copy_url": "Copiar",
+  "url_copied_success": "URL copiado para a área de transferência!",
+  "no_saved_urls": "Nenhum URL salvo encontrado",
+  "server_local_url": "URL do servidor local: {1}",
+  "server_loopback_url": "URL de loopback: {1}",
+  "local_network": "Rede Local",
+  "copied_to_clipboard": "Copiado para a área de transferência!",
+  "share_local_url": "Compartilhe esta URL com outros dispositivos na mesma rede",
+  "ip_not_detected": "Não foi possível detectar o IP da rede local. Acessível apenas nesta máquina.",
+  "view_saved_urls": "Ver URLs Salvos",
+  "summary": "Resumo: {1} túnel(s) ativo(s)"
 }

@@ -7,6 +7,7 @@
   "menu.status": "Current status",
   "menu.view_logs": "View logs",
   "menu.settings": "Settings",
+  "menu.show_saved_urls": "Show saved URLs",
   "menu.exit": "Exit",
 
   "prompt.choose_menu_numeric": "Choose an option (number):",
@@ -26,6 +27,7 @@
   "prompt.choose_setting": "Choose setting:",
   "prompt.new_default_port": "New default port:",
   "prompt.create_dir": "Create directory? (y/n):",
+  "prompt.choose_url_to_copy": "Choose URL to copy:",
 
   "dir_option_current": "Current directory (PWD)",
   "dir_option_default": "Default directory",
@@ -87,5 +89,20 @@
   "settings_change_lang": "Change language",
   "settings_change_port": "Change default port",
   "settings_change_dir": "Change default directory",
-  "settings_ngrok_token": "Configure ngrok token"
+  "settings_ngrok_token": "Configure ngrok token",
+
+  "saved_urls": "Saved URLs",
+  "last_server_url": "Last Server",
+  "last_tunnel_url": "Last Tunnel",
+  "copy_url": "Copy",
+  "url_copied_success": "URL copied to clipboard!",
+  "no_saved_urls": "No saved URLs found",
+  "server_local_url": "Local server URL: {1}",
+  "server_loopback_url": "Loopback URL: {1}",
+  "local_network": "Local Network",
+  "copied_to_clipboard": "Copied to clipboard!",
+  "share_local_url": "Share this URL with other devices on the same network",
+  "ip_not_detected": "Could not detect local network IP. Only accessible from this machine.",
+  "view_saved_urls": "View Saved URLs",
+  "summary": "Summary: {1} active tunnel(s)"
 }

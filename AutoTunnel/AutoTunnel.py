@@ -19,7 +19,7 @@ ASCII_ART_1 = """
 | !_! | | !_! |
 !_____! !_____!"""
 
-ASCII_ART_2 = """ 
+ASCII_ART_2 = r""" 
   /$$$$$$              /$$            /$$$$$$$$                                      /$$
  /$$__  $$            | $$           |__  $$__/                                     | $$
 | $$  \ $$ /$$   /$$ /$$$$$$    /$$$$$$ | $$ /$$   /$$ /$$$$$$$  /$$$$$$$   /$$$$$$ | $$
@@ -511,7 +511,7 @@ def print_header():
             centered_text += " " * padding + line + "\n"
         
         # Create the panel content
-        panel_content = f"[bold cyan]{centered_text}[/bold cyan]\n[bold cyan]AutoTunnel[/bold cyan]\n[green]Fast server + tunnel (cloudflared/ngrok)[/green]\n[dim]Portable • Settings saved in universal format[/dim]"
+        panel_content = f"[bold cyan]{centered_text}[/bold cyan]\n[bold cyan]AutoTunnel v1.3[/bold cyan]\n[green]Fast server + tunnel (cloudflared/ngrok)[/green]\n[dim]Portable • Settings saved in universal format[/dim]\n[yellow]👨‍💻 GitHub: https://github.com/marllondevsec[/yellow]\n[blue]🔗 LinkedIn: https://www.linkedin.com/in/marllondevsec/[/blue]"
         
         console.print(Panel(panel_content, 
                           border_style="cyan",
@@ -522,9 +522,11 @@ def print_header():
         print(ASCII_ART_1)
         print("\n" + ASCII_ART_2)
         print("\n" + "="*60)
-        print("AutoTunnel")
+        print("AutoTunnel v1.3")
         print("Fast server + tunnel (cloudflared/ngrok)")
         print("Portable • Settings saved in universal format")
+        print("👨‍💻 GitHub: https://github.com/marllondevsec")
+        print("🔗 LinkedIn: https://www.linkedin.com/in/marllondevsec/")
         print("="*60 + "\n")
 
 def numeric_choice(prompt_text, options):
