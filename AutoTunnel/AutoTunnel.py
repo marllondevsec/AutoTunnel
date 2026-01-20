@@ -486,7 +486,7 @@ class HttpServer:
     <h1>AutoTunnel HTTP Server</h1>
     <p>{tr("server_started", port)}</p>
     <p>{tr("current_dir", dir_path)}</p>
-    <p>{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+    <p>{datetime.datetime.now().strftime("%Y-%m-d %H:%M:%S")}</p>
 </body>
 </html>''')
                 except Exception as e:
@@ -651,7 +651,7 @@ def print_header():
             centered_text += " " * padding + line + "\n"
         
         # Create the panel content
-        panel_content = f"[bold cyan]{centered_text}[/bold cyan]\n[bold cyan]AutoTunnel v1.3[/bold cyan]\n[green]Fast server + tunnel (cloudflared/ngrok)[/green]\n[dim]Portable • Settings saved in universal format[/dim]\n[yellow]👨💻 GitHub: https://github.com/marllondevsec[/yellow]\n[blue]🔗 LinkedIn: https://www.linkedin.com/in/marllondevsec/[/blue]"
+        panel_content = f"[bold cyan]{centered_text}[/bold cyan]\n[bold cyan]AutoTunnel v1.4[/bold cyan]\n[green]Fast server + tunnel (cloudflared/ngrok)[/green]\n[dim]Portable • Settings saved in universal format[/dim]\n[yellow]👨💻 GitHub: https://github.com/marllondevsec[/yellow]\n[blue]🔗 LinkedIn: https://www.linkedin.com/in/marllondevsec/[/blue]"
         
         console.print(Panel(panel_content, 
                           border_style="cyan",
