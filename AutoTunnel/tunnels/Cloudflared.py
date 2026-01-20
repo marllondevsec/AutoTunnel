@@ -1,6 +1,10 @@
 # tunnels/Cloudflared.py - plugin portátil para cloudflared
-import shutil, subprocess, threading, re, os, time, json
+import shutil, subprocess, threading, re, os, time, json, sys
 from pathlib import Path
+
+# Import AutoTunnel functions
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from AutoTunnel import save_process_info, remove_process_info
 
 def get_autotunnel_data_dir():
     """Get portable data directory - matches AutoTunnel.py"""
@@ -22,6 +26,7 @@ class TunnelPlugin:
         self.pid = None
         self.url = None
         self._reader_thread = None
+        self._active = False
         
         # Use portable paths
         data_dir = get_autotunnel_data_dir()
@@ -68,7 +73,9 @@ class TunnelPlugin:
             # Extract cloudflared URL
             patterns = [
                 r"https://[^\s]+\.trycloudflare\.com",
-                r"\|\s+(https://[^\s]+\.trycloudflare\.com)\s+\|"
+                r"\|\s+(https://[^\s]+\.trycloudflare\.com)\s+\|",
+                r"Your tunnel is available at (https://[^\s]+\.trycloudflare\.com)",
+                r"\+--+\+\s+(https://[^\s]+\.trycloudflare\.com)\s+\+--+\+"
             ]
             
             for pattern in patterns:
@@ -78,11 +85,25 @@ class TunnelPlugin:
                     if not self.url:
                         self.url = url
                         self._write_log(f"URL encontrada: {url}")
+                        
+                        # Update process info with URL
+                        if self.pid:
+                            # We need to update the saved process info
+                            data_dir = get_autotunnel_data_dir()
+                            active_file = data_dir / "active_processes.json"
+                            if active_file.exists():
+                                try:
+                                    active = json.loads(active_file.read_text(encoding="utf-8"))
+                                    if str(self.pid) in active:
+                                        active[str(self.pid)]["url"] = url
+                                        active_file.write_text(json.dumps(active, indent=2), encoding="utf-8")
+                                except:
+                                    pass
                     break
 
     def start(self, local_port: int):
         if self.proc:
-            return
+            self.stop()
         
         # Find cloudflared binary (portable)
         bin_path = None
@@ -99,7 +120,7 @@ class TunnelPlugin:
         
         if not bin_path:
             self._write_log("ERRO: cloudflared não encontrado")
-            return
+            return False
         
         self._write_log(f"Iniciando cloudflared na porta {local_port}")
         
@@ -115,44 +136,74 @@ class TunnelPlugin:
                 bufsize=1
             )
             self.pid = self.proc.pid
+            self._active = True
             self._write_log(f"Processo iniciado com PID: {self.pid}")
+            
+            # Save process info
+            save_process_info("cloudflared", self.pid, local_port, process_type="tunnel")
             
             # Start reader thread
             self._reader_thread = threading.Thread(target=self._reader, daemon=True)
             self._reader_thread.start()
             
+            return True
+            
         except Exception as e:
             self._write_log(f"ERRO ao iniciar: {str(e)}")
             self.proc = None
+            self._active = False
+            return False
 
     def stop(self):
-        if not self.proc:
+        if not self.proc and not self._active:
             return False
         
         self._write_log("Parando cloudflared...")
         
+        success = True
+        
         try:
-            self.proc.terminate()
+            if self.proc:
+                self.proc.terminate()
+                
+                # Wait for termination
+                for _ in range(10):
+                    if self.proc.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                
+                # Force kill if still running
+                if self.proc.poll() is None:
+                    self.proc.kill()
+                    try:
+                        self.proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                
+                self._write_log("cloudflared parado")
             
-            # Wait for termination
-            for _ in range(10):
-                if self.proc.poll() is not None:
-                    break
-                time.sleep(0.5)
-            
-            # Force kill if still running
-            if self.proc.poll() is None:
-                self.proc.kill()
-                self.proc.wait(timeout=2)
-            
-            self._write_log("cloudflared parado")
-            
+            # Remove process info
+            if self.pid:
+                remove_process_info(self.pid)
+                
         except Exception as e:
             self._write_log(f"ERRO ao parar: {str(e)}")
-            return False
+            success = False
         finally:
             self.proc = None
             self.pid = None
             self.url = None
+            self._active = False
         
-        return True
+        return success
+    
+    def is_running(self):
+        """Check if tunnel is running"""
+        if not self.proc:
+            return False
+        
+        # Check if process is still alive
+        try:
+            return self.proc.poll() is None
+        except:
+            return False
