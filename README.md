@@ -1,4 +1,4 @@
-# AutoTunnel
+# AutoTunnel v1.4
 
 <p align="center">
   <img src="assets/pic.png" alt="AutoTunnel main menu" width="800">
