@@ -1,171 +1,160 @@
-# AutoTunnel v1.4
+# AutoTunnel
 
-<p align="center">
-  <img src="assets/pic.png" alt="AutoTunnel main menu" width="800">
-</p>
+![AutoTunnel Main Menu](docs/examples/pic.png)
 
-AutoTunnel is an **interactive CLI utility** written in Python to quickly spin up a **local HTTP server** and expose it to the internet using **secure tunnels** such as **Cloudflared** and **Ngrok**. It is designed for speed and simplicity, featuring **numeric menus**, a **colored UI (Rich)**, **automatic dependency installation**, and a clean operational flow.
+AutoTunnel is a portable, interactive CLI tool that spins up local HTTP servers and exposes them to the internet using secure tunnels such as **Cloudflare Tunnel (cloudflared)** and **ngrok**. It was designed to be fast, self-contained, and easy to use, with zero hard-coded paths and full portability across systems.
 
----
-
-## ✨ Key Features
-
-* 📡 Built-in local HTTP server (ThreadingHTTPServer)
-* 🌐 Automatic exposure via **Cloudflare Tunnel (cloudflared)**
-* 🌍 **Ngrok** support (with auth token)
-* 🧩 **Tunnel plugin system** (extensible)
-* 🎨 Colored terminal UI using **Rich** (auto-installed if missing)
-* 🧭 Simple numeric menus (keyboard-friendly)
-* 📂 Uses the **current working directory (PWD)** by default
-* 📁 Smart directory selection and creation
-* 📜 Integrated log viewer (HTTP + tunnel logs)
-* 📋 Status dashboard (server + tunnels)
-* 📋 Persistent configuration (~/.config/autotunnel)
+Ideal for labs, development, demos, internal sharing, and controlled security testing environments.
 
 ---
 
-## 📦 Requirements
+## ✨ Features
+
+* 🚀 Start local HTTP servers instantly
+* 🌐 Expose local services via Cloudflare Tunnel or ngrok
+* 🔌 Plugin-based tunnel architecture
+* 🧭 Interactive numeric menus (no flags needed)
+* 🎨 Colored UI powered by `rich`
+* 📦 Automatic tunnel binary installation (portable)
+* 🗂️ Fully portable paths (XDG / `~/.config`, `~/.local/share`)
+* 📝 Persistent logs, PIDs, and session metadata
+* 🌍 Multi-language support (PT / EN)
+* 📋 Automatic URL copy to clipboard
+
+---
+
+## 📂 Project Structure
+
+```
+AutoTunnel/
+├── AutoTunnel.py          # Main application (CLI + server manager)
+├── tunnels/
+│   ├── Cloudflared.py     # Cloudflare Tunnel plugin
+│   └── Ngrok.py           # Ngrok plugin
+├── lang/
+│   ├── pt.json            # Portuguese translations
+│   └── en.json            # English translations
+├── docs/
+│   └── examples/
+│       └── pic.png        # Main menu screenshot
+└── README.md
+```
+
+Runtime data is stored in portable locations:
+
+* **Config:** `~/.config/autotunnel/`
+* **Data / Logs / PIDs:** `~/.local/share/autotunnel/`
+
+---
+
+## 🛠 Requirements
 
 * Python **3.8+**
-* Linux (tested on Debian/Kali/Ubuntu-based systems)
-* Internet access (to download tunnel binaries if missing)
+* Linux (tested primarily on Kali / Debian-based systems)
+* Internet access (for tunnel installation)
 
-Optional:
+Optional (installed automatically if missing):
 
-* `sudo` (only needed if installing cloudflared system-wide)
+* `rich`
+* `cloudflared`
+* `ngrok`
 
 ---
 
-## 🚀 Installation
+## ▶️ Usage
 
-Clone the repository:
+Make the script executable and run:
 
 ```bash
-git clone https://github.com/marllondevsec/AutoTunnel.git
-cd AutoTunnel
+chmod +x AutoTunnel.py
+./AutoTunnel.py
 ```
 
-Project structure:
+You will be presented with an interactive menu to:
 
-```text
-AutoTunnel/
-├── README.md
-└── AutoTunnel/
-    ├── AutoTunnel.py      # Main executable (entry point)
-    ├── lang/              # Language files (i18n)
-    │   ├── en.json
-    │   └── pt.json
-    └── tunnels/           # Tunnel plugins
-        ├── Cloudflared.py
-        └── Ngrok.py
-```
+* Start / stop HTTP servers
+* Start tunnels with or without servers
+* View active services
+* Inspect logs
+* Manage settings (language, ports, directories, tokens)
 
-Make the main script executable:
-
-```bash
-chmod +x AutoTunnel/AutoTunnel.py
-```
-
-Run AutoTunnel:
-
-```bash
-./AutoTunnel/AutoTunnel.py
-```
-
-> On first run, AutoTunnel will automatically install the **rich** dependency if it is not available.
+No command-line arguments required.
 
 ---
 
-## 🧠 How it works
+## 🌐 Supported Tunnels
 
-1. AutoTunnel can start a **local HTTP server** on a chosen port and directory
-2. A tunnel plugin (Cloudflared / Ngrok) is selected
-3. If the tunnel binary is missing, AutoTunnel **downloads and installs it automatically**
-4. The tunnel is launched and the **public URL is detected and displayed**
-5. Logs and status can be monitored directly from the interface
+### Cloudflare Tunnel (cloudflared)
 
----
-
-## 📖 Main Menu Options
-
-* **Start HTTP server**
-* **Start tunnel with HTTP server**
-* **Start tunnel only** (for existing services)
-* **Stop HTTP server**
-* **Stop tunnel**
-* **Current status**
-* **View logs**
-* **Settings**
-* **Exit**
-
----
-
-## 🌍 Tunnel Providers
-
-### Cloudflared (recommended)
-
-* No account required for temporary tunnels
-* Supports persistent tunnels if configured manually
-* Automatically downloaded from the official Cloudflare GitHub
+* No account required
+* Uses `trycloudflare.com`
+* Installed automatically in portable mode
 
 ### Ngrok
 
-* Requires an **auth token**
-* Token is stored securely in the local config file
-* AutoTunnel guides you through token setup
+* Requires an authentication token
+* Token is requested once and stored securely in config
+* Installed automatically in portable mode
 
 ---
 
-## 🧩 Plugin System
+## 🔌 Plugin System
 
-Tunnel providers live in the `tunnels/` directory.
+Each tunnel provider is implemented as a self-contained plugin.
 
-Each plugin must expose a `TunnelPlugin` class implementing:
+To add a new tunnel provider:
 
-* `name()`
-* `installed()`
-* `install()` (optional)
-* `start(port)`
-* `stop()`
+1. Create a new Python file in `tunnels/`
+2. Implement a `TunnelPlugin` class
+3. Define at minimum:
 
-This makes it easy to add support for other tunneling tools.
+   * `name()`
+   * `installed()`
+   * `start(port)`
+   * `stop()`
+
+The plugin will be auto-discovered at runtime.
 
 ---
 
-## 📂 Configuration & Data Paths
+## 📝 Logs & State
 
-* Config: `~/.config/autotunnel/config.json`
-* Logs: `~/.local/share/autotunnel/logs/`
-* PIDs: `~/.local/share/autotunnel/pids/`
-* Local binaries: `~/.local/share/autotunnel/bin/`
+AutoTunnel automatically tracks:
+
+* Active servers and tunnels
+* PIDs and ports
+* Public URLs
+* Start time
+
+Logs are stored per-service and can be viewed live from the UI.
 
 ---
 
 ## 🔐 Security Notes
 
-* AutoTunnel does **not** modify firewall rules
-* Exposed services are public — **use only for testing, development, or controlled environments**
-* Ngrok tokens are stored locally in plaintext config (standard ngrok behavior)
+* Designed for **controlled environments** (labs, dev, demos)
+* Exposes local services to the public internet — use responsibly
+* No authentication or access control is added by default
 
 ---
 
-## 🛠 Typical Use Cases
+## 📌 Version
 
-* Quickly exposing a local web app
-* Sharing files or static sites
-* Testing callbacks, webhooks, or C2-style infrastructure (lab environments)
-* Development and debugging
+**AutoTunnel v1.5**
 
 ---
 
-## 📜 License
+## 👨‍💻 Author
 
-MIT License
+**Marllon DevSec**
+
+* GitHub: [https://github.com/marllondevsec](https://github.com/marllondevsec)
+* LinkedIn: [https://www.linkedin.com/in/marllondevsec/](https://www.linkedin.com/in/marllondevsec/)
 
 ---
 
-## 👤 Author
+## 📄 License
 
-AutoTunnel was built for fast, minimal, and controlled tunnel-based workflows.
+This project is provided for educational and development purposes.
 
-Contributions and new tunnel plugins are welcome.
+Use responsibly.
