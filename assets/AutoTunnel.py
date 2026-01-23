@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-AutoTunnel - Servidor HTTP com túneis automáticos (cloudflared/ngrok)
-Menus numéricos, cores (rich), instalação automática.
-Completamente portátil - sem hostnames ou caminhos fixos.
-Versão: 1.5
+AutoTunnel - Minimal, numeric menus, colored (rich), auto-install cloudflared/ngrok.
+Completely portable - no fixed hostnames or absolute paths.
 """
 import os, sys, json, shutil, subprocess, threading, time, re, importlib.util, socket, signal
 from pathlib import Path
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import datetime
 
-# ----------------- ASCII Arts -----------------
+# ---------------- ASCII Arts Separadas ----------------
 ASCII_ART_1 = """
 ._____. ._____.
 | ._. | | ._. |
@@ -31,16 +29,16 @@ ASCII_ART_2 = r"""
 | $$  | $$|  $$$$$$/  |  $$$$/|  $$$$$$/| $$|  $$$$$$/| $$  | $$| $$  | $$|  $$$$$$$| $$
 |__/  |__/ \______/    \___/   \______/ |__/ \______/ |__/  |__/|__/  |__/ \_______/|__/"""
 
-# ----------------- Caminhos Portáteis / Configuração -----------------
+# ---------------- Portable Paths / config ----------------
 def get_user_data_dir():
-    """Obtém diretório portátil para dados do usuário"""
+    """Get portable user data directory"""
     xdg_data_home = os.environ.get('XDG_DATA_HOME')
     if xdg_data_home:
         return Path(xdg_data_home) / "autotunnel"
     return Path.home() / ".local" / "share" / "autotunnel"
 
 def get_user_config_dir():
-    """Obtém diretório portátil para configuração do usuário"""
+    """Get portable user config directory"""
     xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
     if xdg_config_home:
         return Path(xdg_config_home) / "autotunnel"
@@ -48,9 +46,9 @@ def get_user_config_dir():
 
 def to_portable_path(path_str):
     """
-    Converte caminho absoluto para formato portátil.
-    Se o caminho estiver no diretório home, converte para formato ~/
-    Caso contrário, retorna como caminho relativo se possível.
+    Convert absolute path to portable format.
+    If path is in home directory, convert to ~/ format.
+    Otherwise, return as relative path if possible.
     """
     if not path_str:
         return ""
@@ -59,14 +57,14 @@ def to_portable_path(path_str):
         path = Path(path_str).expanduser().resolve()
         home = Path.home()
         
-        # Tenta tornar o caminho relativo à home
+        # Try to make path relative to home
         try:
             if path.is_relative_to(home):
                 return "~/" + str(path.relative_to(home))
         except ValueError:
             pass
         
-        # Tenta tornar o caminho relativo ao diretório atual
+        # Try to make path relative to current directory
         try:
             cwd = Path.cwd()
             if path.is_relative_to(cwd):
@@ -75,15 +73,15 @@ def to_portable_path(path_str):
         except ValueError:
             pass
         
-        # Retorna caminho absoluto como último recurso
+        # Return absolute path as last resort
         return str(path)
     except Exception:
         return path_str
 
 def from_portable_path(portable_path_str):
     """
-    Converte caminho portátil para caminho absoluto.
-    Manipula ~/, ./, e caminhos absolutos.
+    Convert portable path to absolute path.
+    Handles ~/, ./, and absolute paths.
     """
     if not portable_path_str:
         return Path.cwd()
@@ -91,42 +89,42 @@ def from_portable_path(portable_path_str):
     try:
         path_str = str(portable_path_str)
         
-        # Expande ~ para diretório home
+        # Expand ~ to home directory
         if path_str.startswith("~"):
             return Path(path_str).expanduser().resolve()
         
-        # Manipula caminhos relativos começando com .
+        # Handle relative paths starting with .
         if path_str.startswith(".") or not Path(path_str).is_absolute():
-            # Verifica se é relativo ao diretório atual
+            # Check if it's relative to current directory
             abs_path = (Path.cwd() / path_str).resolve()
             if abs_path.exists():
                 return abs_path
-            # Se não, tenta expandir o usuário
+            # If not, try to expand user (in case it's something like "Documents")
             return Path(path_str).expanduser().resolve()
         
-        # Já é absoluto
+        # Already absolute
         return Path(path_str).expanduser().resolve()
     except Exception:
-        # Fallback para diretório atual
+        # Fallback to current directory
         return Path.cwd()
 
 def get_local_ip():
     """
-    Obtém o endereço IP local da máquina.
-    Retorna o IP da interface de rede (não localhost).
+    Get the local IP address of the machine.
+    Returns the network interface IP (not localhost).
     """
     try:
-        # Cria um socket para conectar a um servidor externo
+        # Create a socket to connect to an external server (doesn't send data)
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
-        # Tenta conectar a qualquer IP
+        # Try to connect to any IP (doesn't need to be reachable)
         s.connect(('10.254.254.254', 1))
         ip = s.getsockname()[0]
         s.close()
         return ip
     except Exception:
         try:
-            # Fallback: obtém hostname e resolve para IP
+            # Fallback: get hostname and resolve to IP
             hostname = socket.gethostname()
             ip = socket.gethostbyname(hostname)
             if ip.startswith('127.'):
@@ -137,16 +135,17 @@ def get_local_ip():
 
 def show_server_urls(port):
     """
-    Mostra URLs para acessar o servidor HTTP.
+    Show URLs to access the HTTP server.
     """
     local_ip = get_local_ip()
     
     if console:
         from rich.table import Table
+        from rich.panel import Panel
         
-        # Cria tabela
+        # Create table
         table = Table(box=None, show_header=False, padding=(0, 2))
-        table.add_column("Tipo", style="cyan", no_wrap=True)
+        table.add_column("Type", style="cyan", no_wrap=True)
         table.add_column("URL", style="green")
         
         if local_ip:
@@ -161,7 +160,7 @@ def show_server_urls(port):
         if local_ip:
             console.print(f"\n[yellow]💡 {tr('share_local_url')}[/yellow]")
         
-        # Copia para área de transferência
+        # Copy to clipboard
         if local_ip:
             try:
                 import pyperclip
@@ -171,7 +170,7 @@ def show_server_urls(port):
                 pass
     
     else:
-        # Fallback sem Rich
+        # Fallback without Rich
         print("\n" + "="*60)
         print(tr("server_urls"))
         if local_ip:
@@ -182,7 +181,7 @@ def show_server_urls(port):
         if local_ip:
             print(f"💡 {tr('share_local_url')}")
     
-    # Salva URL para referência futura
+    # Save URL for future reference
     if local_ip:
         url_to_save = f"http://{local_ip}:{port}"
     else:
@@ -191,7 +190,7 @@ def show_server_urls(port):
     (DATA_DIR / "last_server.url").write_text(url_to_save)
     return url_to_save
 
-# Define todos os caminhos usando funções portáteis
+# Define all paths using portable functions
 CONFIG_DIR = get_user_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 DATA_DIR = get_user_data_dir()
@@ -205,16 +204,16 @@ LOCAL_BIN = DATA_DIR / "bin"
 for d in (CONFIG_DIR, DATA_DIR, LOG_DIR, PID_DIR, LOCAL_BIN):
     d.mkdir(parents=True, exist_ok=True)
 
-# Configuração padrão - usa caminhos portáteis
+# Default config - uses portable paths
 DEFAULT_CONFIG = {
     "language": "pt",
     "default_port": 1337,
-    "default_dir": "",
+    "default_dir": "",  # Empty by default - will be set with portable path
     "installed_tunnels": {},
     "ngrok_auth_token": ""
 }
 
-# Fallback em inglês para novas chaves
+# Fallback English translations for new keys
 FALLBACK_EN = {
     "server_local_url": "Local server URL: {1}",
     "server_loopback_url": "Loopback URL: {1}",
@@ -232,6 +231,7 @@ FALLBACK_EN = {
     "view_saved_urls": "View Saved URLs",
     "summary": "Summary: {1} active tunnel(s)",
     "menu.show_saved_urls": "Show saved URLs",
+    # New strings for active process management
     "active_urls": "Active URLs (Tunnels and Servers)",
     "no_active_processes": "No active tunnels or servers found.",
     "process_type_tunnel": "Tunnel",
@@ -252,33 +252,12 @@ FALLBACK_EN = {
     "no_urls_to_copy": "No URLs to copy.",
     "choose_action": "Choose action (number): ",
     "choose_url_to_copy": "Choose URL to copy (number): ",
-    "view_active_urls": "View Active URLs",
-    "server_already_running": "Server already running on port {1}!",
-    "stop_server": "Stop HTTP Server",
-    "stop_all_servers": "Stop ALL servers",
-    "server_stopped_success": "Server on port {1} stopped",
-    "stop_all_servers_prompt": "Stop ALL servers",
-    "stop_all_servers_confirm": "Are you sure? This will stop:",
-    "stop_all_servers_result": "All servers stopped",
-    "choose_server_to_stop": "Choose server to stop:",
-    "stop_specific_service": "Stop specific service",
-    "stop_all_services": "Stop ALL services",
-    "stop_all_services_prompt": "Stop ALL Services",
-    "stop_all_services_confirm": "This will stop:",
-    "stop_all_services_result": "Stopped: {1} server(s), {2} tunnel(s)",
-    "stop_cancelled": "Cancelled",
-    "stop_failed": "Failed to stop",
-    "url_copied": "URL copied",
-    "log_monitor_back": "Ctrl+C to go back",
-    "http_server_log": "HTTP Server (Port {1})",
-    "plugin_log": "{1}",
-    "no_server_running": "Server is not running",
-    "stop_server_prompt": "Stop HTTP Server"
+    "view_active_urls": "View Active URLs"
 }
 
-# ----------------- Gerenciamento de Processos -----------------
+# ---------------- Process Management ----------------
 def save_process_info(name, pid, port, url=None, process_type="tunnel"):
-    """Salva informações do processo em arquivo JSON"""
+    """Save process information to JSON file"""
     info = {
         "name": name,
         "pid": pid,
@@ -291,7 +270,7 @@ def save_process_info(name, pid, port, url=None, process_type="tunnel"):
     pid_file = PID_DIR / f"{name}_{pid}.json"
     pid_file.write_text(json.dumps(info, indent=2), encoding="utf-8")
     
-    # Também atualiza lista de processos ativos
+    # Also update active processes list
     active_file = DATA_DIR / "active_processes.json"
     active = {}
     if active_file.exists():
@@ -303,12 +282,12 @@ def save_process_info(name, pid, port, url=None, process_type="tunnel"):
     return pid_file
 
 def remove_process_info(pid):
-    """Remove informações do processo"""
-    # Remove arquivo PID individual
+    """Remove process information"""
+    # Remove individual PID file
     for pid_file in PID_DIR.glob(f"*_{pid}.json"):
         pid_file.unlink(missing_ok=True)
     
-    # Remove de processos ativos
+    # Remove from active processes
     active_file = DATA_DIR / "active_processes.json"
     if active_file.exists():
         active = json.loads(active_file.read_text(encoding="utf-8"))
@@ -317,10 +296,10 @@ def remove_process_info(pid):
             active_file.write_text(json.dumps(active, indent=2), encoding="utf-8")
 
 def get_active_processes():
-    """Obtém todos os processos ativos com validação"""
+    """Get all active processes with validation"""
     active = []
     
-    # Verifica a partir do arquivo de processos ativos
+    # Check from active processes file
     active_file = DATA_DIR / "active_processes.json"
     if active_file.exists():
         processes = json.loads(active_file.read_text(encoding="utf-8"))
@@ -328,17 +307,17 @@ def get_active_processes():
         for pid_str, info in list(processes.items()):
             try:
                 pid = int(pid_str)
-                # Verifica se o processo está realmente rodando
-                os.kill(pid, 0)  # Levanta OSError se processo não existe
+                # Check if process is actually running
+                os.kill(pid, 0)  # Will raise OSError if process doesn't exist
                 active.append(info)
             except (OSError, ValueError):
-                # Processo está morto, remove-o
+                # Process is dead, remove it
                 remove_process_info(pid)
     
     return active
 
 def is_process_alive(pid):
-    """Verifica se um processo ainda está ativo"""
+    """Check if a process is still alive"""
     try:
         os.kill(pid, 0)
         return True
@@ -346,7 +325,7 @@ def is_process_alive(pid):
         return False
 
 def cleanup_dead_processes():
-    """Remove entradas para processos que não estão mais ativos"""
+    """Remove entries for processes that are no longer alive"""
     active_file = DATA_DIR / "active_processes.json"
     if not active_file.exists():
         return
@@ -361,20 +340,20 @@ def cleanup_dead_processes():
             remove_process_info(pid_str)
 
 def stop_process_by_pid(pid):
-    """Para um processo por PID"""
+    """Stop a process by PID"""
     if not is_process_alive(pid):
         remove_process_info(pid)
         return False
     
     try:
         os.kill(pid, signal.SIGTERM)
-        # Aguarda um pouco para o processo terminar
+        # Wait a bit for process to terminate
         for _ in range(10):
             if not is_process_alive(pid):
                 break
             time.sleep(0.5)
         
-        # Força kill se ainda estiver ativo
+        # Force kill if still alive
         if is_process_alive(pid):
             os.kill(pid, signal.SIGKILL)
             time.sleep(0.5)
@@ -385,7 +364,7 @@ def stop_process_by_pid(pid):
         cprint(f"Error stopping process {pid}: {e}", "red")
         return False
 
-# ----------------- Verifica dependência rich -----------------
+# ---------------- Helpful: ensure rich ----------------
 def ensure_rich():
     try:
         import rich
@@ -410,35 +389,35 @@ if rich:
 else:
     console = None
 
-# ----------------- Configuração / i18n -----------------
+# ---------------- Config / i18n ----------------
 def load_config():
-    """Carrega configuração, garantindo portabilidade e corrigindo caminhos inválidos"""
+    """Load configuration, ensuring portability and fixing invalid paths"""
     if CONFIG_PATH.exists():
         try:
             cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             
-            # Converte quaisquer caminhos absolutos em default_dir para formato portátil
+            # Convert any absolute paths in default_dir to portable format
             if "default_dir" in cfg and cfg["default_dir"]:
                 cfg["default_dir"] = to_portable_path(cfg["default_dir"])
             
-            # Garante que default_dir existe - se não, redefine para diretório atual
+            # Ensure default_dir exists - if not, reset to current directory
             if cfg.get("default_dir"):
                 abs_path = from_portable_path(cfg["default_dir"])
                 if not abs_path.exists():
-                    # Caminho não existe, redefine para diretório atual
+                    # Path doesn't exist, reset to current directory
                     cfg["default_dir"] = to_portable_path(str(Path.cwd()))
             
-            # Se default_dir estiver vazio após validação, define para diretório atual
+            # If default_dir is empty after validation, set to current directory
             if not cfg.get("default_dir"):
                 cfg["default_dir"] = to_portable_path(str(Path.cwd()))
                 
             return cfg
         except Exception as e:
             print(f"Error loading configuration: {e}")
-            # Configuração corrompida, cria nova
+            # Corrupted config, create new
             pass
     
-    # Cria configuração com diretório atual como caminho portátil
+    # Create config with current directory as portable path
     current_portable = to_portable_path(str(Path.cwd()))
     DEFAULT_CONFIG["default_dir"] = current_portable
     CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
@@ -460,13 +439,13 @@ I18N = load_lang(LANG)
 def tr(key, *args):
     s = I18N.get(key)
     if s is None:
-        # Se não encontrado, tenta fallback em inglês
+        # If not found, try English fallback
         s = FALLBACK_EN.get(key, key)
     for i,a in enumerate(args, start=1):
         s = s.replace("{" + str(i) + "}", str(a))
     return s
 
-# ----------------- Handler HTTP Personalizado -----------------
+# ---------------- Custom HTTP Handler ----------------
 class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         log_entry = "%s - - [%s] %s\n" % (
@@ -474,10 +453,14 @@ class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
             self.log_date_time_string(),
             format % args
         )
-        # Registra em localização genérica - logs individuais do servidor são tratados pela classe HttpServer
+        # Log to a generic location - individual server logs are handled by HttpServer class
         log_path = LOG_DIR / "http_server.log"
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(log_entry)
+
+# ============================================================================
+# SUBSTITUA A CLASSE HttpServer (linha ~380) POR ESTA VERSÃO:
+# ============================================================================
 
 class HttpServer:
     """Classe para gerenciar um único servidor HTTP"""
@@ -490,17 +473,17 @@ class HttpServer:
         self.log_path = None
 
     def start(self, port: int, directory: str):
-        """Inicia o servidor HTTP"""
+        """Inicia o servidor HTTP (sem verificação de instância única)"""
         if self.httpd:
             return False  # Este servidor já está rodando
         
-        # Converte caminho portátil para absoluto
+        # Convert portable path to absolute
         try:
             dir_path = from_portable_path(directory)
             if not dir_path.exists():
                 try:
                     dir_path.mkdir(parents=True, exist_ok=True)
-                    # Cria index.html padrão
+                    # Create default index.html
                     index_file = dir_path / "index.html"
                     if not index_file.exists():
                         index_file.write_text(f'''<!DOCTYPE html>
@@ -533,14 +516,14 @@ class HttpServer:
             self.port = port
             self.directory = str(dir_path)
             
-            # Gera um PID único para o servidor
+            # Gera um PID único para o servidor (usando threading.get_ident())
             import threading
             self.pid = f"http_{port}_{threading.get_ident()}"
             
             self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.thread.start()
             
-            # Salva informações do processo para servidor HTTP
+            # Save process info for HTTP server
             save_process_info(f"http_server_{port}", self.pid, port, 
                              url=f"http://{get_local_ip() or '127.0.0.1'}:{port}", 
                              process_type="server")
@@ -558,7 +541,7 @@ class HttpServer:
             return True
         except OSError as e:
             if "Address already in use" in str(e):
-                cprint(tr("server_already_running", port), "red")
+                cprint(f"❌ Port {port} already in use!", "red")
             else:
                 cprint(f"❌ Error starting server: {e}", "red")
             return False
@@ -575,7 +558,7 @@ class HttpServer:
         self.thread.join(timeout=2)
         self.httpd = None
         
-        # Remove informações do processo
+        # Remove process info
         if self.pid:
             remove_process_info(self.pid)
         
@@ -597,8 +580,18 @@ class HttpServer:
         """Verifica se o servidor está rodando"""
         return self.httpd is not None
 
+
+# ============================================================================
+# SUBSTITUA A VARIÁVEL GLOBAL http_server (linha ~450) POR:
+# ============================================================================
+
 # Gerenciador de múltiplos servidores HTTP
 http_servers = {}  # Dicionário: {port: HttpServer}
+
+
+# ============================================================================
+# ADICIONE ESTAS FUNÇÕES AUXILIARES (após http_servers):
+# ============================================================================
 
 def get_active_http_servers():
     """Retorna lista de servidores HTTP ativos"""
@@ -630,6 +623,10 @@ def stop_all_http_servers():
     for port in list(http_servers.keys()):
         stop_http_server(port)
 
+# ============================================================================
+# ADICIONE ESTA FUNÇÃO AUXILIAR (antes de show_active_urls):
+# ============================================================================
+
 def get_all_active_services():
     """
     Retorna TODOS os serviços ativos (servidores HTTP + túneis)
@@ -647,8 +644,8 @@ def get_all_active_services():
                 "pid": server.pid,
                 "url": f"http://{get_local_ip() or '127.0.0.1'}:{port}",
                 "directory": to_portable_path(server.directory),
-                "service_id": f"http_{port}",
-                "start_time": "N/A"
+                "service_id": f"http_{port}",  # ID único para identificar
+                "start_time": "N/A"  # Pode adicionar se quiser rastrear
             })
         else:
             # Remove servidor morto
@@ -672,14 +669,15 @@ def get_all_active_services():
     
     return all_services
 
-# ----------------- Carregador de Plugins -----------------
+
+# ---------------- Plugin loader ----------------
 PLUGINS = {}
 def load_plugins():
     PLUGINS.clear()
     if not PLUGIN_DIR.exists():
         return
     
-    # Carrega Cloudflared
+    # Load Cloudflared
     try:
         spec = importlib.util.spec_from_file_location(
             "autotunnel.plugins.cloudflared",
@@ -692,7 +690,7 @@ def load_plugins():
     except Exception as e:
         cprint(f"Error loading Cloudflared plugin: {e}", "yellow")
     
-    # Carrega Ngrok se existir
+    # Load Ngrok if exists
     ngrok_path = PLUGIN_DIR / "Ngrok.py"
     if ngrok_path.exists():
         try:
@@ -707,7 +705,7 @@ def load_plugins():
         except Exception as e:
             cprint(f"Error loading Ngrok plugin: {e}", "yellow")
     
-    # Carrega outros plugins
+    # Load other plugins
     idx = 3
     for p in sorted(PLUGIN_DIR.glob("*.py")):
         if p.name in ["Cloudflared.py", "Ngrok.py"]:
@@ -729,7 +727,7 @@ def load_plugins():
             except Exception:
                 continue
 
-# ----------------- Utilitários de UI -----------------
+# ---------------- Utils UI ----------------
 def cprint(text, style=None, end="\n"):
     if console:
         console.print(text, style=style, end=end)
@@ -745,44 +743,44 @@ def clear_screen():
 def print_header():
     clear_screen()
     if console:
-        # Centraliza ASCII arts manualmente
+        # Center ASCII arts manually by splitting lines and centering each
         ascii1_lines = ASCII_ART_1.split('\n')
         ascii2_lines = ASCII_ART_2.split('\n')
         
-        # Encontra largura máxima de ambas as ASCII arts
+        # Find maximum width of both ASCII arts
         max_width = max(
             max(len(line) for line in ascii1_lines) if ascii1_lines else 0,
             max(len(line) for line in ascii2_lines) if ascii2_lines else 0
         )
         
-        # Cria texto centralizado
+        # Create centered text
         centered_text = ""
         
-        # Centraliza ASCII art 1
+        # Center ASCII art 1
         for line in ascii1_lines:
             padding = (max_width - len(line)) // 2
             centered_text += " " * padding + line + "\n"
         
         centered_text += "\n"
         
-        # Centraliza ASCII art 2
+        # Center ASCII art 2
         for line in ascii2_lines:
             padding = (max_width - len(line)) // 2
             centered_text += " " * padding + line + "\n"
         
-        # Cria o conteúdo do painel
-        panel_content = f"[bold cyan]{centered_text}[/bold cyan]\n[bold cyan]AutoTunnel v1.5[/bold cyan]\n[green]Fast server + tunnel (cloudflared/ngrok)[/green]\n[dim]Portable • Settings saved in universal format[/dim]\n[yellow]👨💻 GitHub: https://github.com/marllondevsec[/yellow]\n[blue]🔗 LinkedIn: https://www.linkedin.com/in/marllondevsec/[/blue]"
+        # Create the panel content
+        panel_content = f"[bold cyan]{centered_text}[/bold cyan]\n[bold cyan]AutoTunnel v1.4[/bold cyan]\n[green]Fast server + tunnel (cloudflared/ngrok)[/green]\n[dim]Portable • Settings saved in universal format[/dim]\n[yellow]👨💻 GitHub: https://github.com/marllondevsec[/yellow]\n[blue]🔗 LinkedIn: https://www.linkedin.com/in/marllondevsec/[/blue]"
         
         console.print(Panel(panel_content, 
                           border_style="cyan",
                           box=ROUNDED,
                           padding=(1, 2)))
     else:
-        # Fallback sem rich
+        # Fallback without rich
         print(ASCII_ART_1)
         print("\n" + ASCII_ART_2)
         print("\n" + "="*60)
-        print("AutoTunnel v1.5")
+        print("AutoTunnel v1.4")
         print("Fast server + tunnel (cloudflared/ngrok)")
         print("Portable • Settings saved in universal format")
         print("👨💻 GitHub: https://github.com/marllondevsec")
@@ -793,7 +791,7 @@ def numeric_choice(prompt_text, options):
     if console:
         table = Table.grid(padding=(0,1))
         for i,opt in enumerate(options, start=1):
-            # Remove qualquer formatação rich para contagem
+            # Remove any rich formatting for counting
             clean_opt = re.sub(r'\[.*?\]', '', opt)
             table.add_row(f"[bold yellow]{i})[/bold yellow] {opt}")
         console.print(table)
@@ -810,20 +808,20 @@ def numeric_choice(prompt_text, options):
         pass
     return None
 
-# ----------------- Seleção de Diretório (PORTÁTIL) -----------------
+# ---------------- Directory selection (PORTABLE) ----------------
 def choose_dir():
-    """Seleção de diretório portátil com validação"""
+    """Portable directory selection with validation"""
     current_dir = Path.cwd()
     current_portable = to_portable_path(str(current_dir))
     
-    # Obtém diretório padrão (já em formato portátil)
+    # Get default directory (already in portable format)
     default_dir_portable = cfg.get("default_dir", current_portable)
     default_dir_absolute = from_portable_path(default_dir_portable)
     
-    # Verifica se o padrão existe
+    # Check if default exists
     default_exists = default_dir_absolute.exists() and default_dir_absolute.is_dir()
     
-    # Se o padrão não existir, redefine para diretório atual
+    # If default doesn't exist, reset to current directory
     if not default_exists:
         default_dir_portable = current_portable
         default_dir_absolute = current_dir
@@ -856,7 +854,7 @@ def choose_dir():
             return str(default_dir_absolute)
         
         elif (sel == 2 and default_dir_portable == current_portable) or (sel == 3 and default_dir_portable != current_portable):
-            # Escolhe diretório personalizado
+            # Choose custom directory
             cprint("💡 Tip: Use ~/ for home directory or ./ for current directory", "dim")
             path = input(tr("prompt.enter_dir") + " ").strip()
             if not path:
@@ -865,7 +863,7 @@ def choose_dir():
             try:
                 abs_path = from_portable_path(path)
                 if abs_path.exists() and abs_path.is_dir():
-                    # Atualiza diretório padrão para esta nova escolha
+                    # Update default directory to this new choice
                     new_portable = to_portable_path(str(abs_path))
                     if new_portable != current_portable:
                         cfg["default_dir"] = new_portable
@@ -877,7 +875,7 @@ def choose_dir():
                     create = input(tr("prompt.create_dir") + " ").strip().lower()
                     if create in ['s', 'y', 'sim', 'yes']:
                         abs_path.mkdir(parents=True, exist_ok=True)
-                        # Atualiza padrão para novo diretório
+                        # Update default to new directory
                         new_portable = to_portable_path(str(abs_path))
                         cfg["default_dir"] = new_portable
                         save_config()
@@ -888,7 +886,7 @@ def choose_dir():
                 time.sleep(2)
         
         elif (sel == 3 and default_dir_portable == current_portable) or (sel == 4 and default_dir_portable != current_portable):
-            # Cria novo diretório
+            # Create new directory
             path = input(tr("prompt.enter_new_dir") + " ").strip()
             if path:
                 try:
@@ -898,7 +896,7 @@ def choose_dir():
                     
                     cprint(tr("dir_created", portable_path), "green")
                     
-                    # Pergunta se define como padrão
+                    # Ask to set as default
                     set_default = input("⭐ Set as default directory? (y/n): ").strip().lower()
                     if set_default in ['s', 'y', 'sim', 'yes']:
                         cfg["default_dir"] = portable_path
@@ -914,13 +912,13 @@ def choose_dir():
         elif sel == (5 if default_dir_portable != current_portable else 4) or sel is None:
             return None
 
-# ----------------- Salva configuração -----------------
+# ---------------- Save config ----------------
 def save_config():
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
-# ----------------- Instaladores -----------------
+# ---------------- Installers ----------------
 def install_cloudflared_auto():
-    """Instala cloudflared - versão portátil"""
+    """Install cloudflared - portable version"""
     import platform
     arch = platform.machine()
     
@@ -958,7 +956,7 @@ def install_cloudflared_auto():
         return False
 
 def install_ngrok_auto():
-    """Instala ngrok - versão portátil"""
+    """Install ngrok - portable version"""
     import platform, tarfile, warnings
     arch = platform.machine()
     
@@ -997,7 +995,7 @@ def install_ngrok_auto():
         tmp_tar.unlink(missing_ok=True)
         tmp_ngrok.unlink(missing_ok=True)
         
-        # Configura token se necessário
+        # Configure token if needed
         if not cfg.get("ngrok_auth_token"):
             cprint(f"\n🔑 {tr('ngrok_token_required')}", "yellow")
             cprint(tr("ngrok_get_token"), "dim")
@@ -1017,6 +1015,10 @@ def install_ngrok_auto():
     except Exception as e:
         cprint(f"❌ Error installing ngrok: {e}", "red")
         return False
+
+# ============================================================================
+# MODIFIQUE A FUNÇÃO start_tunnel_flow (linha ~700) - SEÇÃO DE SERVIDOR HTTP:
+# ============================================================================
 
 def start_tunnel_flow(only_tunnel=False):
     load_plugins()
@@ -1070,7 +1072,7 @@ def start_tunnel_flow(only_tunnel=False):
         
         # Verifica se a porta já está em uso
         if port in http_servers and http_servers[port].is_running():
-            cprint(tr("server_already_running", port), "yellow")
+            cprint(f"⚠️  Port {port} already has a server running!", "yellow")
             override = input("Start tunnel on existing server? (y/n): ").strip().lower()
             if override not in ['y', 'yes', 's', 'sim']:
                 input(tr("press_enter"))
@@ -1117,7 +1119,7 @@ def start_tunnel_flow(only_tunnel=False):
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             cprint(tr("ngrok_token_saved"), "green")
     
-    # Inicia túnel
+    # Start tunnel
     plugin.start(port)
     
     cprint(tr("waiting_for_url"), "cyan")
@@ -1127,7 +1129,7 @@ def start_tunnel_flow(only_tunnel=False):
             cprint(f"✅ {tr('tunnel_url', url)}", "white")
             (DATA_DIR / "last_tunnel.url").write_text(url)
             
-            # Atualiza informações do processo com URL
+            # Update process info with URL
             if hasattr(plugin, 'pid') and plugin.pid:
                 active_file = DATA_DIR / "active_processes.json"
                 if active_file.exists():
@@ -1155,11 +1157,11 @@ def start_tunnel_flow(only_tunnel=False):
     input(tr("press_enter"))
 
 def stop_tunnel_flow():
-    """Para um túnel específico (escolha interativa)"""
-    # Limpa processos mortos primeiro
+    """Stop a specific tunnel (interactive choice)"""
+    # Clean up dead processes first
     cleanup_dead_processes()
     
-    # Obtém processos de túnel ativos
+    # Get active tunnel processes
     active = get_active_processes()
     tunnel_processes = [p for p in active if p.get("type") == "tunnel"]
     
@@ -1168,7 +1170,7 @@ def stop_tunnel_flow():
         input(tr("press_enter"))
         return
     
-    # Se apenas um túnel rodando, para diretamente
+    # If only one tunnel running, stop it directly
     if len(tunnel_processes) == 1:
         process = tunnel_processes[0]
         pid = process["pid"]
@@ -1182,7 +1184,7 @@ def stop_tunnel_flow():
         input(tr("press_enter"))
         return
     
-    # Múltiplos túneis - deixa o usuário escolher
+    # Multiple tunnels - let user choose
     print_header()
     cprint(f"[bold]🛑 {tr('stop_process')}[/bold]", "cyan")
     
@@ -1213,38 +1215,42 @@ def stop_tunnel_flow():
     
     input(tr("press_enter"))
 
+# ============================================================================
+# SUBSTITUA A FUNÇÃO show_active_urls() COMPLETA POR ESTA:
+# ============================================================================
+
 def show_active_urls():
-    """Mostra serviços ATIVOS (servidores HTTP + túneis) com opções de gerenciamento"""
-    # Limpa processos mortos primeiro
+    """Show ACTIVE services (HTTP servers + tunnels) with management options"""
+    # Clean up dead processes first
     cleanup_dead_processes()
     
     while True:
         print_header()
         cprint(f"[bold]🔗 {tr('active_urls')}[/bold]", "cyan")
         
-        # Obtém TODOS os serviços ativos (servidores + túneis)
+        # Get ALL active services (servers + tunnels)
         all_services = get_all_active_services()
         
         if not all_services:
             cprint(tr("no_active_processes"), "yellow")
             
-            # Ainda mostra URLs salvas se não houver serviços ativos
+            # Still show saved URLs if no active services
             server_url_file = DATA_DIR / "last_server.url"
             tunnel_url_file = DATA_DIR / "last_tunnel.url"
             
             saved_urls = []
             if server_url_file.exists():
-                saved_urls.append((tr("last_server_url"), server_url_file.read_text().strip()))
+                saved_urls.append(("🌐 Último Servidor", server_url_file.read_text().strip()))
             if tunnel_url_file.exists():
-                saved_urls.append((tr("last_tunnel_url"), tunnel_url_file.read_text().strip()))
+                saved_urls.append(("🚇 Último Túnel", tunnel_url_file.read_text().strip()))
             
             if saved_urls:
-                cprint(f"\n📋 {tr('saved_urls')} (não necessariamente ativas):", "yellow")
+                cprint(f"\n📋 URLs Salvas (não necessariamente ativas):", "yellow")
                 for name, url in saved_urls:
                     cprint(f"  {name}: {url}", "white")
         
         else:
-            # Exibe serviços ativos em uma tabela
+            # Display active services in a table
             if console:
                 table = Table(box=None, show_header=True, padding=(0, 2))
                 table.add_column("#", style="cyan", no_wrap=True)
@@ -1259,19 +1265,19 @@ def show_active_urls():
                     port = service.get("port", "?")
                     url = service.get("url", tr("no_url_available"))
                     
-                    # Adiciona informações de diretório para servidores HTTP
+                    # Add directory info for HTTP servers
                     if service_type == "server" and service.get("directory"):
                         name = f"{name} ({service['directory']})"
                     
-                    # Trunca URLs longas para exibição
+                    # Truncate long URLs for display
                     display_url = url
                     if len(url) > 50:
                         display_url = url[:47] + "..."
                     
-                    # Traduz tipo
+                    # Translate type
                     type_display = tr(f"process_type_{service_type}")
                     if not type_display or type_display == f"process_type_{service_type}":
-                        type_display = tr("process_type_server") if service_type == "server" else tr("process_type_tunnel")
+                        type_display = "Servidor" if service_type == "server" else "Túnel"
                     
                     table.add_row(
                         str(i),
@@ -1284,23 +1290,23 @@ def show_active_urls():
                 console.print(table)
             
             else:
-                # Fallback sem Rich
+                # Fallback without Rich
                 for i, service in enumerate(all_services, 1):
                     name = service.get("name", "Unknown")
                     service_type = service.get("type", "unknown")
                     port = service.get("port", "?")
                     url = service.get("url", tr("no_url_available"))
                     
-                    type_display = tr("process_type_server") if service_type == "server" else tr("process_type_tunnel")
+                    type_display = "Servidor" if service_type == "server" else "Túnel"
                     print(f"{i}) {name} [{type_display}] - Port: {port} - {url}")
         
-        # Opções
+        # Options
         print("\n" + "="*60)
         opts = []
         
         if all_services:
-            opts.append(f"🛑 {tr('stop_specific_service')}")
-            opts.append(f"⛔ {tr('stop_all_services')}")
+            opts.append(f"🛑 Parar serviço específico")
+            opts.append(f"⛔ Parar TODOS os serviços")
         
         opts.append(f"📋 {tr('copy_url')}")
         opts.append(f"⬅️ {tr('back')}")
@@ -1310,36 +1316,36 @@ def show_active_urls():
         if sel is None:
             break
         
-        # Opção 1: Parar serviço específico
+        # Option 1: Stop specific service
         if sel == 1 and all_services:
             if len(all_services) == 1:
-                # Apenas um serviço - para diretamente
+                # Only one service - stop it directly
                 service = all_services[0]
                 service_type = service.get("type")
                 name = service.get("name")
                 
-                cprint(f"Stopping {name}...", "cyan")
+                cprint(f"Parando {name}...", "cyan")
                 
                 if service_type == "server":
                     port = service.get("port")
                     if stop_http_server(port):
-                        cprint(tr("server_stopped_success", port), "green")
+                        cprint(f"✅ Servidor na porta {port} parado", "green")
                     else:
-                        cprint(tr("stop_failed"), "red")
-                else:  # túnel
+                        cprint(f"❌ Falha ao parar servidor", "red")
+                else:  # tunnel
                     pid = service.get("pid")
                     if stop_process_by_pid(pid):
-                        cprint(tr("process_stopped", name), "green")
+                        cprint(f"✅ Túnel {name} parado", "green")
                     else:
-                        cprint(tr("stop_failed"), "red")
+                        cprint(f"❌ Falha ao parar túnel", "red")
                 
                 time.sleep(1)
-                continue  # Atualiza a lista
+                continue  # Refresh the list
             
             else:
-                # Múltiplos serviços - escolhe qual parar
+                # Multiple services - choose which to stop
                 print_header()
-                cprint(f"[bold]🛑 {tr('stop_process')}[/bold]", "cyan")
+                cprint("[bold]🛑 Parar Serviço[/bold]", "cyan")
                 
                 stop_opts = []
                 for i, service in enumerate(all_services, 1):
@@ -1352,7 +1358,7 @@ def show_active_urls():
                 
                 stop_opts.append(f"⬅️ {tr('back')}")
                 
-                stop_sel = numeric_choice(tr("choose_server_to_stop"), stop_opts)
+                stop_sel = numeric_choice("Escolha o serviço para parar:", stop_opts)
                 
                 if stop_sel is None or stop_sel > len(all_services):
                     continue
@@ -1361,42 +1367,42 @@ def show_active_urls():
                 service_type = service.get("type")
                 name = service.get("name")
                 
-                cprint(f"Stopping {name}...", "cyan")
+                cprint(f"Parando {name}...", "cyan")
                 
                 if service_type == "server":
                     port = service.get("port")
                     if stop_http_server(port):
-                        cprint(tr("server_stopped_success", port), "green")
+                        cprint(f"✅ Servidor na porta {port} parado", "green")
                     else:
-                        cprint(tr("stop_failed"), "red")
-                else:  # túnel
+                        cprint(f"❌ Falha ao parar servidor", "red")
+                else:  # tunnel
                     pid = service.get("pid")
                     if stop_process_by_pid(pid):
-                        cprint(tr("process_stopped", name), "green")
+                        cprint(f"✅ Túnel {name} parado", "green")
                     else:
-                        cprint(tr("stop_failed"), "red")
+                        cprint(f"❌ Falha ao parar túnel", "red")
                 
                 time.sleep(1)
-                continue  # Atualiza a lista
+                continue  # Refresh the list
         
-        # Opção 2: Parar TODOS os serviços
+        # Option 2: Stop ALL services
         elif sel == 2 and all_services:
             print_header()
-            cprint(f"[bold]⛔ {tr('stop_all_services_prompt')}[/bold]", "red")
-            cprint(f"\n{tr('stop_all_services_confirm')}:", "yellow")
+            cprint("[bold]⛔ Parar TODOS os Serviços[/bold]", "red")
+            cprint(f"\nIsso irá parar:", "yellow")
             
             server_count = sum(1 for s in all_services if s.get("type") == "server")
             tunnel_count = sum(1 for s in all_services if s.get("type") == "tunnel")
             
-            cprint(f"  • {server_count} {tr('process_type_server')}(s)", "white")
-            cprint(f"  • {tunnel_count} {tr('process_type_tunnel')}(s)", "white")
+            cprint(f"  • {server_count} servidor(es) HTTP", "white")
+            cprint(f"  • {tunnel_count} túnel(s)", "white")
             
-            confirm = input("\n❓ " + tr("stop_all_services_confirm") + " (s/n): ").strip().lower()
+            confirm = input("\n❓ Tem certeza? (s/n): ").strip().lower()
             
             if confirm in ['s', 'y', 'sim', 'yes']:
-                cprint(f"\n🛑 {tr('stop_all_services_prompt')}...", "cyan")
+                cprint("\n🛑 Parando todos os serviços...", "cyan")
                 
-                # Para todos os servidores HTTP
+                # Stop all HTTP servers
                 stopped_servers = 0
                 for service in all_services:
                     if service.get("type") == "server":
@@ -1404,7 +1410,7 @@ def show_active_urls():
                         if stop_http_server(port):
                             stopped_servers += 1
                 
-                # Para todos os túneis
+                # Stop all tunnels
                 stopped_tunnels = 0
                 for service in all_services:
                     if service.get("type") == "tunnel":
@@ -1412,27 +1418,27 @@ def show_active_urls():
                         if stop_process_by_pid(pid):
                             stopped_tunnels += 1
                 
-                cprint(tr("stop_all_services_result", stopped_servers, stopped_tunnels), "green")
+                cprint(f"\n✅ Parados: {stopped_servers} servidor(es), {stopped_tunnels} túnel(s)", "green")
                 time.sleep(2)
-                continue  # Atualiza
+                continue  # Refresh
             else:
-                cprint(tr("stop_cancelled"), "yellow")
+                cprint("❌ Cancelado", "yellow")
                 time.sleep(1)
                 continue
         
-        # Opção 3 (ou 1 se não houver serviços): Copiar URL
+        # Option 3 (or 1 if no services): Copy URL
         elif (sel == 3 and all_services) or (sel == 1 and not all_services):
             if not all_services:
-                # Sem serviços ativos, tenta copiar URLs salvas
+                # No active services, try to copy saved URLs
                 urls_to_copy = []
                 
                 server_url_file = DATA_DIR / "last_server.url"
                 if server_url_file.exists():
-                    urls_to_copy.append((tr("last_server_url"), server_url_file.read_text().strip()))
+                    urls_to_copy.append(("🌐 Último Servidor", server_url_file.read_text().strip()))
                 
                 tunnel_url_file = DATA_DIR / "last_tunnel.url"
                 if tunnel_url_file.exists():
-                    urls_to_copy.append((tr("last_tunnel_url"), tunnel_url_file.read_text().strip()))
+                    urls_to_copy.append(("🚇 Último Túnel", tunnel_url_file.read_text().strip()))
                 
                 if not urls_to_copy:
                     cprint(tr("no_urls_to_copy"), "yellow")
@@ -1449,7 +1455,7 @@ def show_active_urls():
                         cprint(tr("url_copied"), "yellow")
                     time.sleep(1)
                 else:
-                    # Múltiplas URLs salvas
+                    # Multiple saved URLs
                     print_header()
                     cprint(f"[bold]📋 {tr('copy_url')}[/bold]", "cyan")
                     
@@ -1474,7 +1480,7 @@ def show_active_urls():
                     time.sleep(1)
             
             else:
-                # Copia URL de serviço ativo
+                # Copy URL from active service
                 if len(all_services) == 1:
                     service = all_services[0]
                     url = service.get("url")
@@ -1490,7 +1496,7 @@ def show_active_urls():
                         cprint(tr("no_url_available"), "yellow")
                         time.sleep(1)
                 else:
-                    # Múltiplos serviços - escolhe qual URL copiar
+                    # Multiple services - choose which URL to copy
                     print_header()
                     cprint(f"[bold]📋 {tr('copy_url')}[/bold]", "cyan")
                     
@@ -1502,7 +1508,7 @@ def show_active_urls():
                         
                         type_emoji = "🌐" if service_type == "server" else "🚇"
                         
-                        # Trunca para exibição
+                        # Truncate for display
                         display_url = url if len(url) <= 40 else url[:37] + "..."
                         copy_opts.append(f"{type_emoji} {name}: {display_url}")
                     
@@ -1530,6 +1536,10 @@ def show_active_urls():
         else:
             break
 
+# ============================================================================
+# MODIFIQUE view_logs() PARA SUPORTAR MÚLTIPLOS SERVIDORES:
+# ============================================================================
+
 def view_logs():
     while True:
         print_header()
@@ -1540,13 +1550,13 @@ def view_logs():
         # Adiciona logs de todos os servidores HTTP ativos
         for port, server in http_servers.items():
             if server.log_path and server.log_path.exists():
-                logs_available.append((tr("http_server_log", port), server.log_path))
+                logs_available.append((f"🌐 HTTP Server (Port {port})", server.log_path))
         
         # Adiciona logs dos plugins
         load_plugins()
         for idx, (name, plugin) in PLUGINS.items():
             if hasattr(plugin, 'log_path') and plugin.log_path and Path(plugin.log_path).exists():
-                logs_available.append((tr("plugin_log", name), plugin.log_path))
+                logs_available.append((f"🚇 {name}", plugin.log_path))
         
         if not logs_available:
             cprint(tr("no_logs_available"), "yellow")
@@ -1626,7 +1636,7 @@ def show_log_file(name, log_path):
 def tail_log(name, log_path):
     print_header()
     cprint(f"[bold]👀 {name}[/bold]", "cyan")
-    cprint(f"[dim]{tr('log_monitor_back')}[/dim]", "white")
+    cprint("[dim]Ctrl+C to go back[/dim]", "white")
     print("-" * 60)
     
     try:
@@ -1656,20 +1666,24 @@ def tail_log(name, log_path):
     except Exception as e:
         cprint(f"❌ Error: {e}", "red")
 
+# ============================================================================
+# MODIFIQUE show_status() PARA MOSTRAR MÚLTIPLOS SERVIDORES:
+# ============================================================================
+
 def show_status():
     print_header()
     
-    # Limpa processos mortos primeiro
+    # Clean up dead processes first
     cleanup_dead_processes()
     
-    # Obtém processos ativos
+    # Get active processes
     active = get_active_processes()
     
-    # Mostra status do servidor HTTP
+    # Show HTTP server status
     active_servers = get_active_http_servers()
     
     if active_servers:
-        cprint(f"✅ {tr('menu.start_server')}: {len(active_servers)} {tr('process_type_server')}(s) ativo(s)", "bold")
+        cprint(f"✅ {tr('menu.start_server')}: {len(active_servers)} servidor(es) ativo(s)", "bold")
         for server_info in active_servers:
             port = server_info["port"]
             directory = to_portable_path(server_info["directory"])
@@ -1690,17 +1704,17 @@ def show_status():
     
     print()
     
-    # Mostra status do túnel a partir de processos ativos
+    # Show tunnel status from active processes
     load_plugins()
     
-    # Conta túneis ativos
+    # Count active tunnels
     active_tunnels = [p for p in active if p.get("type") == "tunnel"]
     running_tunnels = len(active_tunnels)
     
     for idx, (name, plugin) in PLUGINS.items():
         installed = plugin.installed()
         
-        # Verifica se este plugin está rodando
+        # Check if this plugin is running
         is_running = any(p.get("name") == name for p in active_tunnels)
         
         if is_running:
@@ -1712,7 +1726,7 @@ def show_status():
         
         cprint(f"{status} {name}: {'running' if is_running else 'installed' if installed else 'not installed'}", "bold")
         
-        # Se estiver rodando, mostra detalhes
+        # If running, show details
         if is_running:
             for process in active_tunnels:
                 if process.get("name") == name:
@@ -1725,13 +1739,13 @@ def show_status():
                     break
     
     print("\n" + "="*60)
-    cprint(tr("summary", len(active_servers) + running_tunnels), 
+    cprint(f"📊 Summary: {len(active_servers)} server(s), {running_tunnels} tunnel(s)", 
            "green" if (len(active_servers) > 0 or running_tunnels > 0) else "yellow")
     
     print("="*60)
     input(tr("press_enter"))
 
-# ----------------- Configurações -----------------
+# ---------------- Settings ----------------
 def show_settings():
     global I18N, LANG
     
@@ -1767,13 +1781,13 @@ def show_settings():
             elif lsel == 2:
                 cfg["language"] = "en"
             save_config()
-            # Recarrega traduções
+            # Reload translations
             LANG = cfg["language"]
             I18N = load_lang(LANG)
             cprint(tr("lang_saved"), "green")
             time.sleep(2)
-            # Retorna ao menu principal para mostrar idioma atualizado
-            return True  # Sinal para atualizar
+            # Return to main menu to show updated language
+            return True  # Signal to refresh
         elif sel == 2:
             new_port = input(tr("prompt.new_default_port") + " ").strip()
             if new_port:
@@ -1809,11 +1823,11 @@ def show_settings():
     
     return False
 
-# ----------------- Loop Principal -----------------
+# ---------------- Main loop ----------------
 def main():
     load_plugins()
     
-    # Limpa processos mortos na inicialização
+    # Clean up dead processes on startup
     cleanup_dead_processes()
     
     while True:
@@ -1827,12 +1841,16 @@ def main():
             f"✋ {tr('menu.stop_tunnel')}",
             f"📊 {tr('menu.status')}",
             f"📄 {tr('menu.view_logs')}",
-            f"🔗 {tr('view_active_urls')}",
+            f"🔗 {tr('view_active_urls')}",  # Changed from 'menu.show_saved_urls'
             f"⚙️ {tr('menu.settings')}",
             f"🚪 {tr('menu.exit')}"
         ]
         
         sel = numeric_choice(tr("prompt.choose_menu_numeric"), menu_opts)
+        
+        # ============================================================================
+        # MODIFIQUE O MENU PRINCIPAL (linha ~1100) - OPÇÃO 1 (Start Server):
+        # ============================================================================
         
         if sel == 1:
             port = cfg.get("default_port", 1337)
@@ -1846,7 +1864,7 @@ def main():
             
             # Verifica se já existe servidor nesta porta
             if port in http_servers and http_servers[port].is_running():
-                cprint(tr("server_already_running", port), "yellow")
+                cprint(f"⚠️  Server already running on port {port}!", "yellow")
                 input(tr("press_enter"))
                 continue
             
@@ -1874,6 +1892,10 @@ def main():
             
         elif sel == 3:
             start_tunnel_flow(only_tunnel=True)
+        
+        # ============================================================================
+        # MODIFIQUE O MENU PRINCIPAL - OPÇÃO 4 (Stop Server):
+        # ============================================================================
             
         elif sel == 4:
             active_servers = get_active_http_servers()
@@ -1893,7 +1915,7 @@ def main():
             else:
                 # Múltiplos servidores - escolher qual parar
                 print_header()
-                cprint(f"[bold]🛑 {tr('stop_server_prompt')}[/bold]", "cyan")
+                cprint("[bold]🛑 Stop HTTP Server[/bold]", "cyan")
                 
                 opts = []
                 for server in active_servers:
@@ -1901,10 +1923,10 @@ def main():
                     directory = to_portable_path(server["directory"])
                     opts.append(f"Port {port} - {directory}")
                 
-                opts.append(f"🛑 {tr('stop_all_servers')}")
+                opts.append("🛑 Stop ALL servers")
                 opts.append(f"⬅️ {tr('back')}")
                 
-                stop_sel = numeric_choice(tr("choose_server_to_stop"), opts)
+                stop_sel = numeric_choice("Choose server to stop:", opts)
                 
                 if stop_sel is None or stop_sel > len(opts):
                     continue
@@ -1912,13 +1934,13 @@ def main():
                     # Para servidor específico
                     port = active_servers[stop_sel - 1]["port"]
                     if stop_http_server(port):
-                        cprint(tr("server_stopped_success", port), "green")
+                        cprint(f"✅ Server on port {port} stopped", "green")
                     else:
-                        cprint(tr("stop_failed"), "red")
+                        cprint("❌ Failed to stop server", "red")
                 elif stop_sel == len(active_servers) + 1:
                     # Para todos
                     stop_all_http_servers()
-                    cprint(tr("stop_all_servers_result"), "green")
+                    cprint("✅ All servers stopped", "green")
             
             input(tr("press_enter"))
             
@@ -1931,13 +1953,17 @@ def main():
         elif sel == 7:
             view_logs()
             
-        elif sel == 8:  # Mostra URLs ativos
+        elif sel == 8:  # Show active URLs
             show_active_urls()
             
         elif sel == 9:
             refresh = show_settings()
             if refresh:
-                continue  # Atualiza a interface com novo idioma
+                continue  # Refresh the interface with new language
+        
+        # ============================================================================
+        # MODIFIQUE main() PARA PARAR TODOS OS SERVIDORES AO SAIR:
+        # ============================================================================
             
         elif sel == 10:
             cprint("👋 Exiting...", "cyan")

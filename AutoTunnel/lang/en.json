@@ -127,5 +127,26 @@
   "no_urls_to_copy": "No URLs to copy.",
   "choose_action": "Choose action (number): ",
   "choose_url_to_copy": "Choose URL to copy (number): ",
-  "view_active_urls": "View Active URLs"
+  "view_active_urls": "View Active URLs",
+  
+  "server_already_running": "Server already running on port {1}!",
+  "stop_server": "Stop HTTP Server",
+  "stop_all_servers": "Stop ALL servers",
+  "server_stopped_success": "Server on port {1} stopped",
+  "stop_all_servers_prompt": "Stop ALL servers",
+  "stop_all_servers_confirm": "Are you sure? This will stop:",
+  "stop_all_servers_result": "All servers stopped",
+  "choose_server_to_stop": "Choose server to stop:",
+  "stop_specific_service": "Stop specific service",
+  "stop_all_services": "Stop ALL services",
+  "stop_all_services_prompt": "Stop ALL Services",
+  "stop_all_services_confirm": "This will stop:",
+  "stop_all_services_result": "Stopped: {1} server(s), {2} tunnel(s)",
+  "stop_cancelled": "Cancelled",
+  "stop_failed": "Failed to stop",
+  "log_monitor_back": "Ctrl+C to go back",
+  "http_server_log": "HTTP Server (Port {1})",
+  "plugin_log": "{1}",
+  "no_server_running": "Server is not running",
+  "stop_server_prompt": "Stop HTTP Server"
 }

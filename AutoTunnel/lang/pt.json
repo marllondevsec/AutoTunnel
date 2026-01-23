@@ -127,5 +127,26 @@
   "no_urls_to_copy": "Nenhuma URL para copiar.",
   "choose_action": "Escolha uma ação (número): ",
   "choose_url_to_copy": "Escolha uma URL para copiar (número): ",
-  "view_active_urls": "Ver URLs Ativos"
+  "view_active_urls": "Ver URLs Ativos",
+  
+  "server_already_running": "Servidor já está rodando na porta {1}!",
+  "stop_server": "Parar Servidor HTTP",
+  "stop_all_servers": "Parar TODOS os servidores",
+  "server_stopped_success": "Servidor na porta {1} parado",
+  "stop_all_servers_prompt": "Parar TODOS os servidores",
+  "stop_all_servers_confirm": "Tem certeza? Isso irá parar:",
+  "stop_all_servers_result": "Todos os servidores parados",
+  "choose_server_to_stop": "Escolha servidor para parar:",
+  "stop_specific_service": "Parar serviço específico",
+  "stop_all_services": "Parar TODOS os serviços",
+  "stop_all_services_prompt": "Parar TODOS os Serviços",
+  "stop_all_services_confirm": "Isso irá parar:",
+  "stop_all_services_result": "Parados: {1} servidor(es), {2} túnel(s)",
+  "stop_cancelled": "Cancelado",
+  "stop_failed": "Falha ao parar",
+  "log_monitor_back": "Ctrl+C para voltar",
+  "http_server_log": "Servidor HTTP (Porta {1})",
+  "plugin_log": "{1}",
+  "no_server_running": "Servidor não está em execução",
+  "stop_server_prompt": "Parar Servidor HTTP"
 }
